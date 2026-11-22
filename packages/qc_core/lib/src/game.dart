@@ -286,7 +286,14 @@ class GameState {
     return _with(raid: r.copyWith(battle: r.battle!.probe()));
   }
 
-  GameState fire(Tuning tuning) {
+  /// Fires a round. [measured] and [hardware] pass in an outcome measured on
+  /// a quantum computer; without them the simulator samples one.
+  GameState fire(
+    Tuning tuning, {
+    Outcome? measured,
+    HardwareRun? hardware,
+    String? simulatedReason,
+  }) {
     final r = _raid;
     if (r.phase != RaidPhase.battle) throw StateError('Not in battle');
     if (tuning.preset != null &&
@@ -296,7 +303,12 @@ class GameState {
     if (tuning.preset == null && !profile.has(Unlock.dials)) {
       throw StateError('Manual dials are locked');
     }
-    final b = r.battle!.fire(tuning);
+    final b = r.battle!.fire(
+      tuning,
+      measured: measured,
+      hardware: hardware,
+      simulatedReason: simulatedReason,
+    );
     if (!b.result.isOver) return _with(raid: r.copyWith(battle: b));
 
     if (b.result.playerWon) {

@@ -19,10 +19,7 @@ class BattleView extends StatefulWidget {
 }
 
 class _BattleViewState extends State<BattleView> {
-  void _fire(GameController c, Tuning t) {
-    final report = c.fire(t);
-    if (report != null) setState(() {});
-  }
+  void _fire(GameController c, Tuning t) => c.fire(t);
 
   Future<void> _openDials(GameController c) async {
     final t = await showModalBottomSheet<Tuning>(
@@ -126,7 +123,7 @@ class _BattleViewState extends State<BattleView> {
                     style: QC.monoStyle(10.5),
                   ),
                   if (profile.has(Unlock.probe))
-                    _ProbeRow(battle: b, onProbe: c.probe),
+                    _ProbeRow(battle: b, onProbe: c.probe, busy: c.qpu != null),
                 ],
               ),
               const SizedBox(height: 8),
@@ -143,65 +140,150 @@ class _BattleViewState extends State<BattleView> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
-          child: Column(
-            children: [
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+          child: c.qpu != null
+              ? _QpuPanel(run: c.qpu!, onCancel: c.cancelHardware)
+              : Column(
                   children: [
-                    Expanded(
-                      child: _OrderButton(
-                        preset: TuningPreset.hold,
-                        enabled: allowed.contains(TuningPreset.hold),
-                        onTap: (t) => _fire(c, t),
+                    if (c.hardwareActive)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.memory,
+                              size: 14,
+                              color: QC.quantum,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'QPU · IQM ${c.settings.iqmComputer.toUpperCase()} · ${c.settings.iqmShots} SHOTS',
+                              style: QC.monoStyle(11, color: QC.quantum),
+                            ),
+                          ],
+                        ),
+                      ),
+                    IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: _OrderButton(
+                              preset: TuningPreset.hold,
+                              enabled: allowed.contains(TuningPreset.hold),
+                              onTap: (t) => _fire(c, t),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: _OrderButton(
+                              preset: TuningPreset.lance,
+                              enabled: allowed.contains(TuningPreset.lance),
+                              onTap: (t) => _fire(c, t),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: _OrderButton(
-                        preset: TuningPreset.lance,
-                        enabled: allowed.contains(TuningPreset.lance),
-                        onTap: (t) => _fire(c, t),
+                    const SizedBox(height: 6),
+                    IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: _OrderButton(
+                              preset: TuningPreset.conjugate,
+                              enabled: allowed.contains(TuningPreset.conjugate),
+                              onTap: (t) => _fire(c, t),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: _OrderButton(
+                              preset: TuningPreset.phaseLance,
+                              enabled: allowed.contains(
+                                TuningPreset.phaseLance,
+                              ),
+                              onTap: (t) => _fire(c, t),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                    if (profile.has(Unlock.dials))
+                      TextButton.icon(
+                        onPressed: () => _openDials(c),
+                        icon: const Icon(Icons.tune, size: 16, color: QC.muted),
+                        label: Text(
+                          'MANUAL DIALS θ φ α',
+                          style: QC.monoStyle(11.5),
+                        ),
+                      ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 6),
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: _OrderButton(
-                        preset: TuningPreset.conjugate,
-                        enabled: allowed.contains(TuningPreset.conjugate),
-                        onTap: (t) => _fire(c, t),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: _OrderButton(
-                        preset: TuningPreset.phaseLance,
-                        enabled: allowed.contains(TuningPreset.phaseLance),
-                        onTap: (t) => _fire(c, t),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (profile.has(Unlock.dials))
-                TextButton.icon(
-                  onPressed: () => _openDials(c),
-                  icon: const Icon(Icons.tune, size: 16, color: QC.muted),
-                  label: Text('MANUAL DIALS θ φ α', style: QC.monoStyle(11.5)),
-                ),
-            ],
-          ),
         ),
       ],
     );
   }
+}
+
+/// Shown in place of the orders while a round runs on the quantum computer.
+class _QpuPanel extends StatelessWidget {
+  const _QpuPanel({required this.run, required this.onCancel});
+  final QpuRun run;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) => Panel(
+    borderColor: QC.quantum,
+    padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+    child: Semantics(
+      liveRegion: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: QC.quantum,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'TRANSMITTING TO IQM ${run.device.toUpperCase()}',
+                  style: QC.displayStyle(15, color: QC.quantum),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${run.tuning.label} is compiled to native prx and cz gates and '
+            'measured on a real quantum processor.',
+            style: const TextStyle(fontSize: 13, height: 1.35, color: QC.ink),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            run.progress.label.toUpperCase(),
+            style: QC.monoStyle(11.5, color: QC.coherence),
+          ),
+          if (run.progress.jobId != null)
+            Text('JOB ${run.progress.jobId}', style: QC.monoStyle(10.5)),
+          const SizedBox(height: 10),
+          GhostButton(
+            label: 'Leave the queue and simulate',
+            color: QC.grid,
+            display: false,
+            onPressed: onCancel,
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 /// The dashed violet line that ties the readouts between the two ships.
@@ -245,9 +327,16 @@ class _LinkPainter extends CustomPainter {
 }
 
 class _ProbeRow extends StatelessWidget {
-  const _ProbeRow({required this.battle, required this.onProbe});
+  const _ProbeRow({
+    required this.battle,
+    required this.onProbe,
+    this.busy = false,
+  });
   final BattleState battle;
   final VoidCallback onProbe;
+
+  /// A round is on the quantum computer: the plan must not change now.
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -258,12 +347,14 @@ class _ProbeRow extends StatelessWidget {
         OutlinedButton(
           style: OutlinedButton.styleFrom(
             backgroundColor: QC.film,
-            side: BorderSide(color: battle.canProbe ? QC.coherence : QC.grid),
+            side: BorderSide(
+              color: battle.canProbe && !busy ? QC.coherence : QC.grid,
+            ),
             shape: const RoundedRectangleBorder(borderRadius: QC.radius),
             minimumSize: const Size.fromHeight(44),
             padding: const EdgeInsets.symmetric(horizontal: 10),
           ),
-          onPressed: battle.canProbe ? onProbe : null,
+          onPressed: battle.canProbe && !busy ? onProbe : null,
           child: Row(
             children: [
               const Icon(Icons.radar, size: 18, color: QC.coherence),

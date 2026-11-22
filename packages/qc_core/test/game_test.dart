@@ -161,6 +161,117 @@ void main() {
     });
   });
 
+  group('hardware outcomes', () {
+    test(
+      'the round fidelity is fixed before the shot and inside the forecast',
+      () {
+        var b = _battle(FactionId.federation, seed: 12);
+        for (var i = 0; i < 20 && !b.result.isOver; i++) {
+          final w = b.weather, f = b.pendingFidelity;
+          expect(f, inInclusiveRange(w.minPercent, w.maxPercent));
+          b = b.fire(TuningPreset.lance.tuning);
+          expect(b.log.last.fidelityPercent, f);
+        }
+      },
+    );
+
+    test('a measured outcome replaces the sampled one and is recorded', () {
+      final b = _battle(FactionId.guild, seed: 3);
+      const run = HardwareRun(
+        device: 'garnet',
+        jobId: 'job-1',
+        qubits: ['QB1', 'QB2'],
+        shots: 10,
+        counts: [1, 6, 2, 1],
+      );
+      for (final o in Outcome.values) {
+        final next = b.fire(
+          TuningPreset.hold.tuning,
+          measured: o,
+          hardware: run,
+        );
+        expect(next.log.single.outcome, o);
+        expect(next.log.single.hardware!.jobId, 'job-1');
+        final d = next.log.single.table[o.index];
+        expect(next.you.hull, playerHull - d.toYou);
+      }
+      expect(b.fire(TuningPreset.hold.tuning).log.single.hardware, isNull);
+    });
+
+    test('the circuit sent to hardware is the one the round resolves', () {
+      final b = _battle(FactionId.corsairs, seed: 9);
+      final you = TuningPreset.phaseLance.tuning;
+      final ideal = simulateNative(
+        compileRound(you, b.plan, b.pendingFidelity / 100),
+      );
+      final report = b.fire(you).log.single;
+      for (var i = 0; i < 4; i++) {
+        expect(ideal[i], closeTo(report.probabilities[i], 1e-9));
+      }
+    });
+
+    test('hardware provenance survives a save', () {
+      const run = HardwareRun(
+        device: 'garnet',
+        jobId: 'abc',
+        qubits: ['QB1', 'QB2'],
+        shots: 100,
+        counts: [10, 60, 25, 5],
+      );
+      final b = _battle(FactionId.guild).fire(
+        TuningPreset.lance.tuning,
+        measured: Outcome.youLance,
+        hardware: run,
+      );
+      final r = BattleState.fromJson(
+        jsonDecode(jsonEncode(b.toJson())) as Map<String, Object?>,
+      ).log.single.hardware!;
+      expect(
+        [r.device, r.jobId, r.shots, r.counts],
+        [
+          'garnet',
+          'abc',
+          100,
+          [10, 60, 25, 5],
+        ],
+      );
+    });
+  });
+
+  group('legacy saves', () {
+    test('a save without pending fidelity resumes exactly as before', () {
+      // Old fire(): draw fidelity, then the outcome, from the saved RNG.
+      final b = _battle(FactionId.hunters, seed: 21);
+      final j = jsonDecode(jsonEncode(b.toJson())) as Map<String, Object?>;
+      j.remove('pf');
+      final legacy = BattleState.fromJson(j);
+
+      final rng = Rng(j['rng'] as int);
+      final f = b.weather.drawPercent(rng);
+      final probs = outcomeProbabilities(
+        TuningPreset.lance.tuning,
+        b.plan,
+        f / 100,
+      );
+      final expected = sampleOutcome(probs, rng.nextDouble());
+
+      expect(legacy.pendingFidelity, f);
+      final r = legacy.fire(TuningPreset.lance.tuning).log.single;
+      expect(r.fidelityPercent, f);
+      expect(r.outcome, expected);
+    });
+
+    test('a simulated-fallback reason is kept with the round', () {
+      final b = _battle(
+        FactionId.guild,
+      ).fire(TuningPreset.hold.tuning, simulatedReason: 'QPU offline');
+      final back = BattleState.fromJson(
+        jsonDecode(jsonEncode(b.toJson())) as Map<String, Object?>,
+      );
+      expect(back.log.single.simulatedReason, 'QPU offline');
+    });
+  });
+
   group('enemy AI', () {
     final table = damageTable(
       youBeam: 1,
