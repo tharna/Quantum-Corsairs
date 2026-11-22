@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -339,7 +340,8 @@ void main() {
         return http.Response(jsonEncode({'job_id': 'job-9'}), 200);
       }
       if (p.endsWith('/cancel')) return http.Response('', 200);
-      return http.Response('boom', 500);
+      // Not a blip: the server refuses the request outright.
+      return http.Response('{"detail": "bad request"}', 400);
     });
     final c = IqmResonanceClient(const IqmConfig(token: 't'), client: flaky);
     await expectLater(
@@ -392,5 +394,233 @@ void main() {
         reason: '$bad',
       );
     }
+  });
+
+  group('network blips while a paid job runs', () {
+    /// Like the phone that reported this: the job is created and completes,
+    /// but some later requests fail DNS lookup.
+    MockClient flakyServer({
+      required int statusFailures,
+      required int measurementFailures,
+      int submitFailures = 0,
+      List<http.Request>? log,
+    }) {
+      var status = 0, meas = 0, submits = 0;
+      return MockClient((r) async {
+        log?.add(r);
+        final p = r.url.path;
+        if (p.endsWith('/dynamic-quantum-architecture')) {
+          return http.Response(jsonEncode(_dqa), 200);
+        }
+        if (r.method == 'POST' && p.endsWith('/circuit')) {
+          if (submits++ < submitFailures) {
+            throw http.ClientException(
+              "Failed host lookup: 'resonance.iqm.tech'",
+              r.url,
+            );
+          }
+          return http.Response(jsonEncode({'job_id': 'paid'}), 200);
+        }
+        if (p.endsWith('/jobs/paid')) {
+          if (status++ < statusFailures) {
+            throw http.ClientException(
+              "Failed host lookup: 'resonance.iqm.tech'",
+              r.url,
+            );
+          }
+          return http.Response(
+            jsonEncode({'job_id': 'paid', 'job_status': 'ready'}),
+            200,
+          );
+        }
+        if (p.endsWith('/artifacts/measurements')) {
+          if (meas++ < measurementFailures) {
+            return http.Response('{"detail": "upstream"}', 503);
+          }
+          return http.Response(
+            jsonEncode([
+              {
+                'you': [
+                  [1],
+                ],
+                'them': [
+                  [0],
+                ],
+              },
+            ]),
+            200,
+          );
+        }
+        if (p.endsWith('/cancel')) return http.Response('', 200);
+        return http.Response('', 404);
+      });
+    }
+
+    IqmResonanceClient client(MockClient m) =>
+        IqmResonanceClient(const IqmConfig(token: 't'), client: m)
+          ..retryDelay = Duration.zero;
+
+    test('the result survives failed host lookups and a busy server', () async {
+      final log = <http.Request>[];
+      final r = await client(
+        flakyServer(statusFailures: 6, measurementFailures: 5, log: log),
+      ).runRound(ops, pollInterval: Duration.zero);
+      expect(r.jobId, 'paid');
+      expect(r.shots, [Outcome.youLance]);
+      expect(
+        log.any((q) => q.url.path.endsWith('/cancel')),
+        isFalse,
+        reason: 'a paid, finished job is never cancelled',
+      );
+    });
+
+    test(
+      'a submission that never left the device is retried once safely',
+      () async {
+        final log = <http.Request>[];
+        final r = await client(
+          flakyServer(
+            statusFailures: 0,
+            measurementFailures: 0,
+            submitFailures: 2,
+            log: log,
+          ),
+        ).runRound(ops, pollInterval: Duration.zero);
+        expect(r.jobId, 'paid');
+        expect(
+          log
+              .where(
+                (q) => q.method == 'POST' && q.url.path.endsWith('/circuit'),
+              )
+              .length,
+          3,
+        );
+      },
+    );
+
+    test(
+      'a timed-out submission is not resent, so a job is never paid twice',
+      () async {
+        var submits = 0;
+        final m = MockClient((r) async {
+          if (r.url.path.endsWith('/dynamic-quantum-architecture')) {
+            return http.Response(jsonEncode(_dqa), 200);
+          }
+          submits++;
+          throw http.ClientException(
+            'Connection closed while receiving data',
+            r.url,
+          );
+        });
+        await expectLater(
+          client(m).runRound(ops, pollInterval: Duration.zero),
+          throwsA(isA<IqmException>()),
+        );
+        expect(submits, 1);
+      },
+    );
+
+    test('errors after submission name the job', () async {
+      final m = MockClient((r) async {
+        final p = r.url.path;
+        if (p.endsWith('/dynamic-quantum-architecture')) {
+          return http.Response(jsonEncode(_dqa), 200);
+        }
+        if (r.method == 'POST' && p.endsWith('/circuit')) {
+          return http.Response(jsonEncode({'job_id': 'j-77'}), 200);
+        }
+        if (p.endsWith('/jobs/j-77')) {
+          return http.Response(jsonEncode({'job_status': 'failed'}), 200);
+        }
+        return http.Response('', 200);
+      });
+      await expectLater(
+        client(m).runRound(ops, pollInterval: Duration.zero),
+        throwsA(isA<IqmException>().having((e) => e.jobId, 'jobId', 'j-77')),
+      );
+    });
+  });
+
+  test(
+    'if contact never comes back, the job is cancelled at the deadline',
+    () async {
+      final requests = <http.Request>[];
+      final m = MockClient((r) async {
+        requests.add(r);
+        final p = r.url.path;
+        if (p.endsWith('/dynamic-quantum-architecture')) {
+          return http.Response(jsonEncode(_dqa), 200);
+        }
+        if (r.method == 'POST' && p.endsWith('/circuit')) {
+          return http.Response(jsonEncode({'job_id': 'gone'}), 200);
+        }
+        if (p.endsWith('/cancel')) return http.Response('', 200);
+        return http.Response('', 503);
+      });
+      final c = IqmResonanceClient(
+        const IqmConfig(token: 't', timeout: Duration(milliseconds: 200)),
+        client: m,
+      )..retryDelay = Duration.zero;
+      await expectLater(
+        c.runRound(ops, pollInterval: const Duration(milliseconds: 10)),
+        throwsA(
+          isA<IqmException>()
+              .having((e) => e.message, 'message', contains('Lost contact'))
+              .having((e) => e.jobId, 'jobId', 'gone'),
+        ),
+      );
+      expect(requests.last.url.path, '/api/v1/jobs/gone/cancel');
+    },
+  );
+
+  test('leaving the queue between submission retries creates no job', () async {
+    final cancel = IqmCancellation();
+    var posts = 0;
+    final m = MockClient((r) async {
+      if (r.url.path.endsWith('/dynamic-quantum-architecture')) {
+        return http.Response(jsonEncode(_dqa), 200);
+      }
+      posts++;
+      cancel.cancel(); // the player taps "Leave the queue" during the backoff
+      throw http.ClientException(
+        "Failed host lookup: 'resonance.iqm.tech'",
+        r.url,
+      );
+    });
+    final c = IqmResonanceClient(const IqmConfig(token: 't'), client: m)
+      ..retryDelay = const Duration(milliseconds: 20);
+    await expectLater(
+      c.runRound(ops, cancellation: cancel, pollInterval: Duration.zero),
+      throwsA(
+        isA<IqmException>().having((e) => e.message, 'message', 'Cancelled.'),
+      ),
+    );
+    expect(posts, 1);
+  });
+
+  test('a hanging server cannot hold the round past its deadline', () async {
+    final m = MockClient((r) async {
+      final p = r.url.path;
+      if (p.endsWith('/dynamic-quantum-architecture')) {
+        return http.Response(jsonEncode(_dqa), 200);
+      }
+      if (r.method == 'POST' && p.endsWith('/circuit')) {
+        return http.Response(jsonEncode({'job_id': 'hang'}), 200);
+      }
+      if (p.endsWith('/cancel')) return http.Response('', 200);
+      // Status requests never answer.
+      return Completer<http.Response>().future;
+    });
+    final c = IqmResonanceClient(
+      const IqmConfig(token: 't', timeout: Duration(milliseconds: 400)),
+      client: m,
+    )..retryDelay = const Duration(seconds: 5);
+    final watch = Stopwatch()..start();
+    await expectLater(
+      c.runRound(ops, pollInterval: const Duration(seconds: 5)),
+      throwsA(isA<IqmException>()),
+    );
+    // 400 ms budget; the 30 s request timeout and 5 s backoff are capped.
+    expect(watch.elapsed, lessThan(const Duration(seconds: 3)));
   });
 }

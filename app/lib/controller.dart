@@ -360,10 +360,17 @@ class GameController extends ChangeNotifier {
     } catch (e) {
       if (!current()) return;
       qpu = null;
-      final why = run.cancellation.isCancelled
-          ? 'You left the queue'
-          : 'The quantum computer was unavailable: $e';
-      _resolve(t, simulatedReason: '$why. This round was simulated.');
+      final String why;
+      if (run.cancellation.isCancelled) {
+        why = 'You left the queue';
+      } else {
+        final msg = '$e'.replaceAll(RegExp(r'[.\s]+$'), '');
+        why = 'The quantum computer was unavailable: $msg';
+      }
+      final job = e is IqmException && e.jobId != null
+          ? ' (job ${e.jobId})'
+          : '';
+      _resolve(t, simulatedReason: '$why$job. This round was simulated.');
     } finally {
       client.close();
     }

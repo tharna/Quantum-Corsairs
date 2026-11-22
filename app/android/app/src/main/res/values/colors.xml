@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The game's deep-field background, so launching never flashes white. -->
+    <color name="qc_field">#060912</color>
+</resources>

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:qc_core/qc_core.dart';
 
@@ -40,9 +41,33 @@ class IqmConfig {
 }
 
 class IqmException implements Exception {
-  const IqmException(this.message, {this.statusCode});
+  const IqmException(
+    this.message, {
+    this.statusCode,
+    this.transient = false,
+    this.notSent = false,
+    this.jobId,
+  });
   final String message;
   final int? statusCode;
+
+  /// A network blip or a busy server: worth retrying.
+  final bool transient;
+
+  /// The request never left the device (DNS failure, refused connection),
+  /// so even a job submission can be retried safely.
+  final bool notSent;
+
+  /// Set once a job exists on the server, so the player can find it.
+  final String? jobId;
+
+  IqmException withJob(String id) => IqmException(
+    message,
+    statusCode: statusCode,
+    transient: transient,
+    notSent: notSent,
+    jobId: id,
+  );
 
   @override
   String toString() => message;
@@ -166,11 +191,61 @@ class IqmResonanceClient {
     'Accept': 'application/json',
   };
 
+  /// Sends a request, retrying transient failures up to [retries] times with
+  /// backoff. With [retryOnlyUnsent] (job submission) only failures where
+  /// nothing reached the server are retried, so a job is never created twice.
+  ///
+  /// With a [deadline], every attempt's timeout and every backoff delay is
+  /// capped to the time left, and no attempt starts after it. With a
+  /// [cancellation], no attempt starts once the player has left the queue.
   Future<Object?> _send(
     String method,
     String path, {
     Object? body,
     Duration timeout = const Duration(seconds: 30),
+    int retries = 0,
+    bool retryOnlyUnsent = false,
+    DateTime? deadline,
+    IqmCancellation? cancellation,
+  }) async {
+    Duration left() =>
+        deadline == null ? timeout : deadline.difference(DateTime.now());
+    for (var attempt = 0; ; attempt++) {
+      _checkCancelled(cancellation);
+      final remaining = left();
+      if (remaining <= Duration.zero) {
+        throw const IqmException(
+          'Ran out of time waiting for IQM Resonance',
+          transient: true,
+        );
+      }
+      try {
+        return await _sendOnce(
+          method,
+          path,
+          body: body,
+          timeout: remaining < timeout ? remaining : timeout,
+        );
+      } on IqmException catch (e) {
+        final retryable = retryOnlyUnsent ? e.notSent : e.transient;
+        if (!retryable || attempt >= retries) rethrow;
+        final pause = retryDelay * (1 << attempt);
+        final cap = left();
+        if (cap <= Duration.zero) rethrow;
+        await Future<void>.delayed(pause < cap ? pause : cap);
+      }
+    }
+  }
+
+  /// Base delay between retries; doubled after each attempt.
+  @visibleForTesting
+  Duration retryDelay = const Duration(milliseconds: 500);
+
+  Future<Object?> _sendOnce(
+    String method,
+    String path, {
+    required Object? body,
+    required Duration timeout,
   }) async {
     final uri = _uri(path);
     http.Response r;
@@ -182,11 +257,27 @@ class IqmResonanceClient {
       }
       r = await _http.send(req).then(http.Response.fromStream).timeout(timeout);
     } on TimeoutException {
-      throw const IqmException('IQM Resonance did not answer in time.');
+      throw const IqmException(
+        'IQM Resonance did not answer in time',
+        transient: true,
+      );
     } on http.ClientException catch (e) {
+      final m = e.message.toLowerCase();
       throw IqmException(
-        'Could not reach IQM Resonance (${e.message}). In a web browser the '
-        'server may also refuse cross-origin requests.',
+        'Could not reach IQM Resonance (${e.message})'
+        '${kIsWeb ? '. In a web browser the server may also refuse cross-origin requests' : ''}',
+        transient: true,
+        notSent:
+            m.contains('host lookup') ||
+            m.contains('connection refused') ||
+            m.contains('network is unreachable'),
+      );
+    }
+    if (const {429, 500, 502, 503, 504}.contains(r.statusCode)) {
+      throw IqmException(
+        'IQM Resonance is busy (HTTP ${r.statusCode})',
+        statusCode: r.statusCode,
+        transient: true,
       );
     }
     if (r.statusCode == 401 || r.statusCode == 403) {
@@ -239,6 +330,7 @@ class IqmResonanceClient {
     final j = await _send(
       'GET',
       'calibration-sets/${config.computer}/default/dynamic-quantum-architecture',
+      retries: 3,
     );
     if (j is! Map) throw const IqmException('Unexpected quantum architecture.');
     final qubits = {for (final q in (j['qubits'] as List? ?? const [])) '$q'};
@@ -360,10 +452,16 @@ class IqmResonanceClient {
     onProgress?.call(const IqmProgress('submitting'));
     final placement = await route();
     final pair = (placement.you, placement.them);
+    // Leaving the queue before the job exists means no job is ever created,
+    // even between retries of a submission that never left the device.
     final created = await _send(
       'POST',
       'jobs/${config.computer}/circuit',
       body: jobBody(ops, placement),
+      retries: 3,
+      retryOnlyUnsent: true,
+      deadline: deadline,
+      cancellation: cancellation,
     );
     final jobId = created is Map
         ? '${created['job_id'] ?? created['id'] ?? ''}'
@@ -372,19 +470,37 @@ class IqmResonanceClient {
       throw const IqmException('IQM Resonance did not return a job ID.');
     }
 
-    // From here on the job exists on the server: any way out other than a
-    // finished result cancels it, and waits for that before returning.
+    // From here on the job exists on the server and may already be paid for.
+    // Network blips must not throw its result away: transient failures are
+    // retried until the deadline. Any other way out cancels the job (unless
+    // it already finished) and waits for that before returning.
     var finished = false;
+    IqmException? lastBlip;
+    void checkDeadline() {
+      if (DateTime.now().isAfter(deadline)) {
+        throw IqmException(
+          lastBlip == null
+              ? 'The job did not finish within ${config.timeout.inSeconds} s'
+              : 'Lost contact with IQM Resonance: ${lastBlip.message}',
+        );
+      }
+    }
+
     try {
       var wait = pollInterval;
       while (true) {
         _checkCancelled(cancellation);
-        if (DateTime.now().isAfter(deadline)) {
-          throw IqmException(
-            'The job did not finish within ${config.timeout.inSeconds} s.',
-          );
+        checkDeadline();
+        Object? j;
+        try {
+          j = await _send('GET', 'jobs/$jobId', retries: 3, deadline: deadline);
+        } on IqmException catch (e) {
+          if (!e.transient) rethrow;
+          lastBlip = e;
+          await _sleepUntil(wait, deadline);
+          continue;
         }
-        final j = await _send('GET', 'jobs/$jobId');
+        lastBlip = null;
         final status = j is Map
             ? '${j['job_status'] ?? j['status'] ?? ''}'
             : '';
@@ -401,20 +517,44 @@ class IqmResonanceClient {
               : null;
           throw IqmException('The job $status${msg == null ? '' : ': $msg'}');
         }
-        await Future<void>.delayed(wait);
+        await _sleepUntil(wait, deadline);
         if (wait < const Duration(seconds: 5)) wait *= 2;
       }
       finished = true;
-      _checkCancelled(cancellation);
-      final m = await _send('GET', 'jobs/$jobId/artifacts/measurements');
-      final shots = parseShots(m);
-      // The player may have left the queue while the results downloaded.
-      _checkCancelled(cancellation);
-      return IqmRoundResult(jobId: jobId, qubits: pair, shots: shots);
+      while (true) {
+        _checkCancelled(cancellation);
+        checkDeadline();
+        try {
+          final m = await _send(
+            'GET',
+            'jobs/$jobId/artifacts/measurements',
+            retries: 3,
+            deadline: deadline,
+          );
+          final shots = parseShots(m);
+          // The player may have left the queue while the results downloaded.
+          _checkCancelled(cancellation);
+          return IqmRoundResult(jobId: jobId, qubits: pair, shots: shots);
+        } on IqmException catch (e) {
+          if (!e.transient) rethrow;
+          lastBlip = e;
+          await _sleepUntil(pollInterval, deadline);
+        }
+      }
+    } on IqmException catch (e) {
+      if (!finished) await _cancelQuietly(jobId);
+      throw e.withJob(jobId);
     } catch (_) {
       if (!finished) await _cancelQuietly(jobId);
       rethrow;
     }
+  }
+
+  /// Waits [d], but never past [deadline].
+  static Future<void> _sleepUntil(Duration d, DateTime deadline) {
+    final left = deadline.difference(DateTime.now());
+    if (left <= Duration.zero) return Future<void>.value();
+    return Future<void>.delayed(d < left ? d : left);
   }
 
   static void _checkCancelled(IqmCancellation? c) {
