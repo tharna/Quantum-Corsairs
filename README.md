@@ -36,6 +36,31 @@ This is the MVP scope from the design document:
 - **Offline play:** the game saves after every action, uses bundled fonts and loads CanvasKit locally on web.
 - **Accessibility:** semantics labels on custom widgets, 44 px minimum tap targets, and colour never used as the only signal.
 
+## Real quantum hardware (IQM Resonance)
+
+Rounds can be measured on a real superconducting quantum computer through [IQM Resonance](https://resonance.iqm.tech/), IQM's cloud service. Set it up under Settings › Quantum hardware:
+
+1. Paste the API token from your Resonance account. It is kept in the device's secure storage (Keychain on iOS, an encrypted store on Android, WebCrypto-encrypted storage on the web), never in the game save.
+2. Check the quantum computer name. The default is `garnet`; any device whose name appears in your Resonance account and that has CZ gates directly between qubits will work.
+3. Choose the shots per round, then tap **Save and test connection**. The test asks the device for its current calibration and reports the two coupled qubits it will use.
+4. Switch on **Measure on real hardware**.
+
+**How a round runs:**
+1. The game builds the round's circuit: the Bell-lock RYY(γ), both tunings, RYY(−γ) and a measurement. The Bell-lock fidelity γ is drawn from the forecast when the enemy commits, so the whole circuit is known before you fire.
+2. `packages/qc_core/lib/src/native.dart` compiles the circuit to IQM's native gates: 4 `cz` gates, single-qubit `prx` gates, and Z rotations tracked as virtual frame changes.
+3. The app submits it as a circuit job to the IQM Server REST API (`POST /api/v1/jobs/{computer}/circuit`), polls the job, and reads every shot.
+4. The **first shot** decides the round, so the collapse is a single real measurement. The report also shows all shots next to the ideal odds; the difference between them is the hardware's noise.
+
+The compiled circuits are checked in two ways:
+- **In Dart:** against the game engine, for every preset pairing and 500 random dial settings.
+- **In CI:** against Qiskit, which rebuilds them with `RGate` (the same gate as IQM's `prx`) and CZ (`test/native_vectors.json`).
+
+If anything fails (no network, a rejected token, a failed job, more than 3 minutes in the queue) or you leave the queue, the round is simulated instead and the report says why. Jobs use your Resonance credits.
+
+In the web version, the browser can only reach IQM Resonance if IQM's server allows cross-origin requests. If it doesn't, the round falls back to the simulator; the Android and iOS apps are not affected.
+
+The client follows the endpoints and payloads of IQM's official `iqm-client` Python package (version 37). It is tested against a fake server. It has not yet been run against a live Resonance account, because the IQM servers are not reachable from the environment where it was written.
+
 ## Running
 
 You need Flutter 3.50 or later.

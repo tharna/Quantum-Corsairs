@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import '../controller.dart';
 import '../theme.dart';
 import '../widgets/console.dart';
+import 'hardware_settings.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -84,6 +85,10 @@ class SettingsScreen extends StatelessWidget {
                   'Replace the collapse flicker with a plain reveal.',
                   s.reducedMotion,
                   (v) => c.updateSettings(s.copyWith(reducedMotion: v)),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(10, 8, 10, 8),
+                  child: HardwareSettings(),
                 ),
                 ListTile(
                   title: const Text(

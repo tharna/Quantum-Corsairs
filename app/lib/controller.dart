@@ -7,6 +7,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:qc_core/qc_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'hardware/iqm_resonance.dart';
+import 'hardware/token_store.dart';
+
 /// Player preferences, saved with the game.
 class Settings {
   const Settings({
@@ -14,6 +17,10 @@ class Settings {
     this.haptics = true,
     this.reducedMotion = false,
     this.seenHints = const {},
+    this.hardware = false,
+    this.iqmServer = IqmConfig.defaultServer,
+    this.iqmComputer = IqmConfig.defaultComputer,
+    this.iqmShots = 100,
   });
 
   final bool sound;
@@ -21,16 +28,30 @@ class Settings {
   final bool reducedMotion;
   final Set<String> seenHints;
 
+  /// Measure rounds on a real quantum computer through IQM Resonance.
+  final bool hardware;
+  final String iqmServer;
+  final String iqmComputer;
+  final int iqmShots;
+
   Settings copyWith({
     bool? sound,
     bool? haptics,
     bool? reducedMotion,
     Set<String>? seenHints,
+    bool? hardware,
+    String? iqmServer,
+    String? iqmComputer,
+    int? iqmShots,
   }) => Settings(
     sound: sound ?? this.sound,
     haptics: haptics ?? this.haptics,
     reducedMotion: reducedMotion ?? this.reducedMotion,
     seenHints: seenHints ?? this.seenHints,
+    hardware: hardware ?? this.hardware,
+    iqmServer: iqmServer ?? this.iqmServer,
+    iqmComputer: iqmComputer ?? this.iqmComputer,
+    iqmShots: iqmShots ?? this.iqmShots,
   );
 
   Map<String, Object?> toJson() => {
@@ -38,6 +59,10 @@ class Settings {
     'haptics': haptics,
     'reducedMotion': reducedMotion,
     'hints': seenHints.toList()..sort(),
+    'hardware': hardware,
+    'iqmServer': iqmServer,
+    'iqmComputer': iqmComputer,
+    'iqmShots': iqmShots,
   };
 
   static Settings fromJson(Map<String, Object?> j) => Settings(
@@ -47,6 +72,10 @@ class Settings {
     seenHints: {
       for (final h in (j['hints'] as List<Object?>? ?? const [])) h as String,
     },
+    hardware: j['hardware'] as bool? ?? false,
+    iqmServer: j['iqmServer'] as String? ?? IqmConfig.defaultServer,
+    iqmComputer: j['iqmComputer'] as String? ?? IqmConfig.defaultComputer,
+    iqmShots: j['iqmShots'] as int? ?? 100,
   );
 }
 
@@ -110,13 +139,36 @@ class SoundBank {
   }
 }
 
+/// A round waiting on the quantum computer.
+class QpuRun {
+  QpuRun(this.device, this.tuning);
+  final String device;
+  final Tuning tuning;
+  final IqmCancellation cancellation = IqmCancellation();
+  IqmProgress progress = const IqmProgress('submitting');
+}
+
+/// Why a round that should have run on hardware was simulated instead.
+class QpuNotice {
+  const QpuNotice(this.round, this.message);
+  final int round;
+  final String message;
+}
+
 /// Owns the [GameState], applies actions, saves after every one, and fires
 /// sound and haptics. Screens read it and call its methods.
 class GameController extends ChangeNotifier {
-  GameController({SaveStore? store, SoundBank? sounds, math.Random? seeds})
-    : _store = store ?? PrefsStore(),
-      _sounds = sounds ?? SoundBank(),
-      _seeds = seeds ?? math.Random();
+  GameController({
+    SaveStore? store,
+    SoundBank? sounds,
+    math.Random? seeds,
+    TokenStore? tokens,
+    IqmResonanceClient Function(IqmConfig)? iqm,
+  }) : _store = store ?? PrefsStore(),
+       _sounds = sounds ?? SoundBank(),
+       _seeds = seeds ?? math.Random(),
+       _tokens = tokens ?? SecureTokenStore(),
+       _iqmFactory = iqm ?? IqmResonanceClient.new;
 
   static const _gameKey = 'qc.save';
   static const _settingsKey = 'qc.settings';
@@ -124,6 +176,20 @@ class GameController extends ChangeNotifier {
   final SaveStore _store;
   final SoundBank _sounds;
   final math.Random _seeds;
+  final TokenStore _tokens;
+  final IqmResonanceClient Function(IqmConfig) _iqmFactory;
+  String _iqmToken = '';
+
+  /// The round currently running on quantum hardware, if any.
+  QpuRun? qpu;
+
+  /// Set when the latest round fell back to the simulator.
+  QpuNotice? qpuNotice;
+
+  bool get hasIqmToken => _iqmToken.trim().isNotEmpty;
+
+  /// Rounds go to the quantum computer only when switched on with a token.
+  bool get hardwareActive => _settings.hardware && hasIqmToken;
 
   GameState _game = const GameState();
   Settings _settings = const Settings();
@@ -153,6 +219,7 @@ class GameController extends ChangeNotifier {
     } catch (_) {
       _settings = const Settings();
     }
+    _iqmToken = await _tokens.read() ?? '';
     _loaded = true;
     notifyListeners();
   }
@@ -230,15 +297,79 @@ class GameController extends ChangeNotifier {
     _apply(_game.probe());
   }
 
-  /// Fires and returns the resolved round, or null if nothing happened.
-  RoundReport? fire(Tuning t) {
-    if (raid?.phase != RaidPhase.battle) return null;
+  /// Fires a round: on the quantum computer when [hardwareActive], else in
+  /// the simulator. A hardware failure falls back to the simulator.
+  void fire(Tuning t) {
+    if (raid?.phase != RaidPhase.battle || qpu != null) return;
+    if (hardwareActive) {
+      _fireOnHardware(t);
+    } else {
+      _resolve(t);
+    }
+  }
+
+  /// Leaves the queue and simulates the round instead.
+  void cancelHardware() => qpu?.cancellation.cancel();
+
+  IqmConfig _iqmConfig() => IqmConfig(
+    serverUrl: _settings.iqmServer,
+    computer: _settings.iqmComputer,
+    token: _iqmToken,
+    shots: _settings.iqmShots,
+  );
+
+  Future<void> _fireOnHardware(Tuning t) async {
+    final b = battle!;
+    final run = QpuRun(_settings.iqmComputer, t);
+    qpu = run;
+    qpuNotice = null;
+    sfx(Sfx.probe);
+    notifyListeners();
+    final client = _iqmFactory(_iqmConfig());
+    try {
+      final ops = compileRound(t, b.plan, b.pendingFidelity / 100);
+      final r = await client.runRound(
+        ops,
+        cancellation: run.cancellation,
+        onProgress: (p) {
+          run.progress = p;
+          notifyListeners();
+        },
+      );
+      qpu = null;
+      // The game may have moved on (reset, new raid) while we waited.
+      if (!identical(battle, b)) return notifyListeners();
+      _resolve(
+        t,
+        measured: r.shots.first,
+        hardware: HardwareRun(
+          device: run.device,
+          jobId: r.jobId,
+          qubits: [r.qubits.$1, r.qubits.$2],
+          shots: r.shots.length,
+          counts: r.counts,
+        ),
+      );
+    } catch (e) {
+      qpu = null;
+      if (!identical(battle, b)) return notifyListeners();
+      final why = run.cancellation.isCancelled
+          ? 'You left the queue'
+          : 'The quantum computer was unavailable: $e';
+      qpuNotice = QpuNotice(b.round + 1, '$why. This round was simulated.');
+      _resolve(t);
+    } finally {
+      client.close();
+    }
+  }
+
+  void _resolve(Tuning t, {Outcome? measured, HardwareRun? hardware}) {
     final unlockBefore = _game.profile.unlockLevel;
-    _apply(_game.fire(t));
+    _apply(_game.fire(t, measured: measured, hardware: hardware));
     final report = battle!.last!;
     sfx(Sfx.collapse);
     buzz(heavy: true);
-    if (!_settings.sound) return report;
+    if (!_settings.sound) return;
     // Impact sounds land as the collapse animation locks in.
     Future<void>.delayed(const Duration(milliseconds: 650), () {
       final d = report.damage;
@@ -252,7 +383,6 @@ class GameController extends ChangeNotifier {
       }
       if (phase == RaidPhase.defeat) sfx(Sfx.defeat);
     });
-    return report;
   }
 
   void fightProtector() {
@@ -287,6 +417,33 @@ class GameController extends ChangeNotifier {
     _enqueue(() => _store.write(_settingsKey, json));
   }
 
+  /// Stores the IQM Resonance API token in secure storage. An empty token
+  /// removes it and switches hardware mode off.
+  Future<void> setIqmToken(String token) async {
+    _iqmToken = token.trim();
+    if (_iqmToken.isEmpty) {
+      await _tokens.delete();
+      if (_settings.hardware) {
+        updateSettings(_settings.copyWith(hardware: false));
+      }
+    } else {
+      await _tokens.write(_iqmToken);
+    }
+    notifyListeners();
+  }
+
+  /// Checks the token and computer by asking for a usable pair of qubits.
+  Future<String> testIqmConnection() async {
+    if (!hasIqmToken) throw const IqmException('Add an API token first.');
+    final client = _iqmFactory(_iqmConfig());
+    try {
+      final (a, b) = await client.qubitPair();
+      return 'Connected to ${_settings.iqmComputer}. Rounds will use qubits $a and $b.';
+    } finally {
+      client.close();
+    }
+  }
+
   bool hintSeen(String id) => _settings.seenHints.contains(id);
 
   void dismissHint(String id) => updateSettings(
@@ -316,4 +473,9 @@ class GameScope extends InheritedNotifier<GameController> {
 
   static GameController of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<GameScope>()!.notifier!;
+
+  /// Reads the controller without rebuilding on changes. Safe in initState
+  /// and in callbacks.
+  static GameController read(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<GameScope>()!.notifier!;
 }

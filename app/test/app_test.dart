@@ -5,12 +5,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qc_core/qc_core.dart';
 import 'package:quantum_corsairs/controller.dart';
+import 'package:quantum_corsairs/hardware/token_store.dart';
 import 'package:quantum_corsairs/main.dart';
 
 GameController _controller(MemoryStore store, {int seed = 1}) => GameController(
   store: store,
   sounds: SoundBank(enabled: false),
   seeds: math.Random(seed),
+  tokens: MemoryTokenStore(),
 );
 
 MemoryStore _quietStore() => MemoryStore()

@@ -192,6 +192,16 @@ class _CollapseViewState extends State<CollapseView>
                       measured: locked ? r.outcome : null,
                     ),
                   ),
+                  if (r.hardware != null) ...[
+                    const SizedBox(height: 10),
+                    _HardwarePanel(report: r),
+                  ] else if (c.qpuNotice?.round == r.round) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      c.qpuNotice!.message,
+                      style: const TextStyle(fontSize: 13, color: QC.them),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   AnimatedOpacity(
                     opacity: locked ? 1 : 0,
@@ -299,6 +309,114 @@ class _CollapseViewState extends State<CollapseView>
       ];
     }
     return [PrimaryButton(label: 'Return to port', onPressed: c.returnToPort)];
+  }
+}
+
+/// Where a hardware round was measured, and how all its shots fell compared
+/// with the ideal odds.
+class _HardwarePanel extends StatelessWidget {
+  const _HardwarePanel({required this.report});
+  final RoundReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final hw = report.hardware!;
+    final total = hw.counts.fold<int>(0, (a, b) => a + b);
+    return Panel(
+      borderColor: QC.quantum,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.memory, size: 16, color: QC.quantum),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'MEASURED ON IQM ${hw.device.toUpperCase()}',
+                  style: QC.displayStyle(15, color: QC.quantum),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Qubits ${hw.qubits.join(' and ')} · ${hw.shots} shots · the first shot decided the round',
+            style: const TextStyle(fontSize: 12.5, color: QC.muted),
+          ),
+          const SizedBox(height: 8),
+          for (final o in Outcome.values)
+            Semantics(
+              label:
+                  '${o.ket}: measured ${hw.counts[o.index]} of $total, ideal ${(report.probabilities[o.index] * 100).round()} percent',
+              child: ExcludeSemantics(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 40,
+                        child: Text(
+                          o.ket,
+                          style: QC.monoStyle(
+                            12,
+                            color: o == report.outcome ? QC.ink : QC.quantum,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: LayoutBuilder(
+                          builder: (context, box) {
+                            final measured = total == 0
+                                ? 0.0
+                                : hw.counts[o.index] / total;
+                            final ideal = report.probabilities[o.index];
+                            return SizedBox(
+                              height: 12,
+                              child: Stack(
+                                children: [
+                                  Container(color: QC.grid),
+                                  Container(
+                                    width: box.maxWidth * measured,
+                                    color: QC.quantum,
+                                  ),
+                                  Positioned(
+                                    left: (box.maxWidth * ideal - 1).clamp(
+                                      0,
+                                      box.maxWidth - 2,
+                                    ),
+                                    top: 0,
+                                    bottom: 0,
+                                    child: Container(width: 2, color: QC.ink),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      SizedBox(
+                        width: 44,
+                        child: Text(
+                          '${hw.counts[o.index]}',
+                          textAlign: TextAlign.right,
+                          style: QC.monoStyle(12, color: QC.ink),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          const SizedBox(height: 2),
+          Text(
+            'Violet bars: real shots. White ticks: the ideal odds. The gap is the hardware noise.',
+            style: QC.monoStyle(10.5),
+          ),
+          Text('JOB ${hw.jobId}', style: QC.monoStyle(10.5)),
+        ],
+      ),
+    );
   }
 }
 
