@@ -194,6 +194,10 @@ class IqmResonanceClient {
   /// Sends a request, retrying transient failures up to [retries] times with
   /// backoff. With [retryOnlyUnsent] (job submission) only failures where
   /// nothing reached the server are retried, so a job is never created twice.
+  ///
+  /// With a [deadline], every attempt's timeout and every backoff delay is
+  /// capped to the time left, and no attempt starts after it. With a
+  /// [cancellation], no attempt starts once the player has left the queue.
   Future<Object?> _send(
     String method,
     String path, {
@@ -201,14 +205,34 @@ class IqmResonanceClient {
     Duration timeout = const Duration(seconds: 30),
     int retries = 0,
     bool retryOnlyUnsent = false,
+    DateTime? deadline,
+    IqmCancellation? cancellation,
   }) async {
+    Duration left() =>
+        deadline == null ? timeout : deadline.difference(DateTime.now());
     for (var attempt = 0; ; attempt++) {
+      _checkCancelled(cancellation);
+      final remaining = left();
+      if (remaining <= Duration.zero) {
+        throw const IqmException(
+          'Ran out of time waiting for IQM Resonance',
+          transient: true,
+        );
+      }
       try {
-        return await _sendOnce(method, path, body: body, timeout: timeout);
+        return await _sendOnce(
+          method,
+          path,
+          body: body,
+          timeout: remaining < timeout ? remaining : timeout,
+        );
       } on IqmException catch (e) {
         final retryable = retryOnlyUnsent ? e.notSent : e.transient;
         if (!retryable || attempt >= retries) rethrow;
-        await Future<void>.delayed(retryDelay * (1 << attempt));
+        final pause = retryDelay * (1 << attempt);
+        final cap = left();
+        if (cap <= Duration.zero) rethrow;
+        await Future<void>.delayed(pause < cap ? pause : cap);
       }
     }
   }
@@ -428,12 +452,16 @@ class IqmResonanceClient {
     onProgress?.call(const IqmProgress('submitting'));
     final placement = await route();
     final pair = (placement.you, placement.them);
+    // Leaving the queue before the job exists means no job is ever created,
+    // even between retries of a submission that never left the device.
     final created = await _send(
       'POST',
       'jobs/${config.computer}/circuit',
       body: jobBody(ops, placement),
       retries: 3,
       retryOnlyUnsent: true,
+      deadline: deadline,
+      cancellation: cancellation,
     );
     final jobId = created is Map
         ? '${created['job_id'] ?? created['id'] ?? ''}'
@@ -465,11 +493,11 @@ class IqmResonanceClient {
         checkDeadline();
         Object? j;
         try {
-          j = await _send('GET', 'jobs/$jobId', retries: 3);
+          j = await _send('GET', 'jobs/$jobId', retries: 3, deadline: deadline);
         } on IqmException catch (e) {
           if (!e.transient) rethrow;
           lastBlip = e;
-          await Future<void>.delayed(wait);
+          await _sleepUntil(wait, deadline);
           continue;
         }
         lastBlip = null;
@@ -489,7 +517,7 @@ class IqmResonanceClient {
               : null;
           throw IqmException('The job $status${msg == null ? '' : ': $msg'}');
         }
-        await Future<void>.delayed(wait);
+        await _sleepUntil(wait, deadline);
         if (wait < const Duration(seconds: 5)) wait *= 2;
       }
       finished = true;
@@ -501,6 +529,7 @@ class IqmResonanceClient {
             'GET',
             'jobs/$jobId/artifacts/measurements',
             retries: 3,
+            deadline: deadline,
           );
           final shots = parseShots(m);
           // The player may have left the queue while the results downloaded.
@@ -509,7 +538,7 @@ class IqmResonanceClient {
         } on IqmException catch (e) {
           if (!e.transient) rethrow;
           lastBlip = e;
-          await Future<void>.delayed(pollInterval);
+          await _sleepUntil(pollInterval, deadline);
         }
       }
     } on IqmException catch (e) {
@@ -519,6 +548,13 @@ class IqmResonanceClient {
       if (!finished) await _cancelQuietly(jobId);
       rethrow;
     }
+  }
+
+  /// Waits [d], but never past [deadline].
+  static Future<void> _sleepUntil(Duration d, DateTime deadline) {
+    final left = deadline.difference(DateTime.now());
+    if (left <= Duration.zero) return Future<void>.value();
+    return Future<void>.delayed(d < left ? d : left);
   }
 
   static void _checkCancelled(IqmCancellation? c) {

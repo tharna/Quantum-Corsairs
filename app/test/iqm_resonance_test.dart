@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -571,4 +572,55 @@ void main() {
       expect(requests.last.url.path, '/api/v1/jobs/gone/cancel');
     },
   );
+
+  test('leaving the queue between submission retries creates no job', () async {
+    final cancel = IqmCancellation();
+    var posts = 0;
+    final m = MockClient((r) async {
+      if (r.url.path.endsWith('/dynamic-quantum-architecture')) {
+        return http.Response(jsonEncode(_dqa), 200);
+      }
+      posts++;
+      cancel.cancel(); // the player taps "Leave the queue" during the backoff
+      throw http.ClientException(
+        "Failed host lookup: 'resonance.iqm.tech'",
+        r.url,
+      );
+    });
+    final c = IqmResonanceClient(const IqmConfig(token: 't'), client: m)
+      ..retryDelay = const Duration(milliseconds: 20);
+    await expectLater(
+      c.runRound(ops, cancellation: cancel, pollInterval: Duration.zero),
+      throwsA(
+        isA<IqmException>().having((e) => e.message, 'message', 'Cancelled.'),
+      ),
+    );
+    expect(posts, 1);
+  });
+
+  test('a hanging server cannot hold the round past its deadline', () async {
+    final m = MockClient((r) async {
+      final p = r.url.path;
+      if (p.endsWith('/dynamic-quantum-architecture')) {
+        return http.Response(jsonEncode(_dqa), 200);
+      }
+      if (r.method == 'POST' && p.endsWith('/circuit')) {
+        return http.Response(jsonEncode({'job_id': 'hang'}), 200);
+      }
+      if (p.endsWith('/cancel')) return http.Response('', 200);
+      // Status requests never answer.
+      return Completer<http.Response>().future;
+    });
+    final c = IqmResonanceClient(
+      const IqmConfig(token: 't', timeout: Duration(milliseconds: 400)),
+      client: m,
+    )..retryDelay = const Duration(seconds: 5);
+    final watch = Stopwatch()..start();
+    await expectLater(
+      c.runRound(ops, pollInterval: const Duration(seconds: 5)),
+      throwsA(isA<IqmException>()),
+    );
+    // 400 ms budget; the 30 s request timeout and 5 s backoff are capped.
+    expect(watch.elapsed, lessThan(const Duration(seconds: 3)));
+  });
 }
