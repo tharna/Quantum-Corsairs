@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quantum Corsairs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Pirata+One&family=Sometype+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: a ship's console in one phone-width column. Blackletter names against mono readouts;
+   the two hulls on top, the storm forecast, the orders, then the collapse grid as the centrepiece. */
+:root {
+  --bg: #0c1022;
+  --surface: #151a31;
+  --line: #2b3254;
+  --ink: #ece7d8;
+  --muted: #9da1ba;
+  --you: #e3b54f;
+  --them: #f0705e;
+  --storm: #74d3e0;
+  --font-display: "Pirata One", "Luminari", "Palatino Linotype", serif;
+  --font-body: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Sometype Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  background-image: radial-gradient(120% 60% at 50% -10%, #1c2350 0%, rgba(12,16,34,0) 70%);
+  background-repeat: no-repeat;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.45;
+}
+main {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 22px 16px 44px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+header { display: flex; flex-direction: column; gap: 6px; }
+h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 46px;
+  line-height: 0.95;
+  letter-spacing: 0.01em;
+  margin: 0;
+  color: var(--you);
+}
+h2 {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+p { margin: 0; }
+.lede { color: var(--muted); font-size: 15px; max-width: 60ch; }
+.tally { font-family: var(--font-mono); font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.tally b { color: var(--you); font-weight: 500; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ships { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ship { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ship.you { border-top: 3px solid var(--you); }
+.ship.them { border-top: 3px solid var(--them); }
+.ship .art { width: 72px; height: 28px; display: block; }
+.ship .art.flip { transform: scaleX(-1); align-self: flex-end; }
+.ship.you .art { fill: var(--you); }
+.ship.them .art { fill: var(--them); }
+.ship .art .jet { fill: var(--storm); }
+.ship .art .port { fill: var(--bg); }
+.ship .cls { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.ship .name { font-family: var(--font-display); font-size: 24px; line-height: 1.05; overflow-wrap: anywhere; }
+.ship.you .name { color: var(--you); }
+.ship.them .name { color: var(--them); }
+.stat { display: flex; flex-direction: column; gap: 4px; }
+.stat .row { display: flex; justify-content: space-between; gap: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stat .row b { color: var(--ink); font-weight: 500; }
+.meter { height: 8px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.meter i { display: block; height: 100%; transition: width 0.3s ease; }
+.you .meter i { background: var(--you); }
+.them .meter i { background: var(--them); }
+.pips { display: flex; gap: 5px; }
+.pips span { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--muted); }
+.you .pips span.on { background: var(--you); border-color: var(--you); }
+.them .pips span.on { background: var(--them); border-color: var(--them); }
+.habit { font-size: 14px; color: var(--muted); }
+.habit b { color: var(--them); font-weight: 600; }
+
+.weather { border-left: 3px solid var(--storm); }
+.weather .state { font-family: var(--font-display); font-size: 24px; line-height: 1.1; color: var(--storm); }
+.fore { display: flex; flex-direction: column; gap: 4px; }
+.fore .top { display: flex; justify-content: space-between; gap: 8px; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fore .top b { color: var(--ink); font-weight: 500; }
+.track { position: relative; height: 12px; border-radius: 2px; background: var(--line); }
+.track .span { position: absolute; top: 0; bottom: 0; background: var(--storm); border-radius: 2px; transition: left 0.3s ease, width 0.3s ease; }
+.track .half { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; background: var(--ink); }
+.small { font-size: 13.5px; color: var(--muted); }
+.probe .top { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.probe .count { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.probe .count b { color: var(--storm); font-weight: 500; }
+.probe button { border-color: var(--storm); font-weight: 600; text-align: center; }
+.readout { font-size: 15px; }
+.readout b { color: var(--them); font-weight: 600; }
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  min-height: 44px;
+  cursor: pointer;
+  text-align: left;
+}
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--storm); outline-offset: 2px; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+.orders { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.orders button { display: flex; flex-direction: column; gap: 3px; border-color: var(--you); min-width: 0; }
+.orders button:active:not(:disabled) { background: rgba(227,181,79,0.12); }
+.orders .nm { font-weight: 600; line-height: 1.2; }
+.orders .gt { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--you); }
+.orders .ds { font-size: 13px; color: var(--muted); line-height: 1.3; }
+.primary { border-color: var(--you); font-weight: 600; text-align: center; }
+details { border-top: 1px solid var(--line); padding-top: 10px; }
+summary { cursor: pointer; font-weight: 500; min-height: 28px; }
+details > .inner { display: flex; flex-direction: column; gap: 12px; padding-top: 10px; }
+.slider { display: flex; flex-direction: column; gap: 2px; }
+.slider .top { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
+.slider output { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: var(--you); height: 28px; margin: 0; }
+
+.tag { align-self: flex-start; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; border: 1px solid var(--line); border-radius: 2px; padding: 2px 8px; color: var(--muted); }
+.played { font-size: 15px; }
+.played .y { color: var(--you); font-weight: 600; }
+.played .t { color: var(--them); font-weight: 600; }
+.grid { display: grid; grid-template-columns: minmax(52px, auto) 1fr 1fr; gap: 6px; font-size: 12.5px; }
+.grid .head, .grid .rowhead { color: var(--muted); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.25; }
+.grid .head { display: flex; align-items: flex-end; padding-bottom: 2px; }
+.grid .rowhead { display: flex; align-items: center; }
+.cell { border: 1px solid var(--line); border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.cell .dmg { font-family: var(--font-mono); font-variant-numeric: tabular-nums; display: flex; flex-direction: column; }
+.cell .dmg .y { color: var(--you); }
+.cell .dmg .t { color: var(--them); }
+.cell .bar { height: 5px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.cell .bar i { display: block; height: 100%; background: var(--storm); }
+.cell .pct { font-family: var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.grid.fired .cell { animation: flicker 0.5s ease-out; }
+.grid.fired .cell:not(.hit) { opacity: 0.55; }
+.grid.fired .cell.hit { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink), 0 0 18px rgba(116,211,224,0.35); animation: lock 0.8s ease-out; }
+.cell.hit .pct { color: var(--ink); }
+@keyframes flicker { 0% { opacity: 0.2; } 25% { opacity: 0.9; } 50% { opacity: 0.3; } 75% { opacity: 0.8; } 100% { opacity: 0.55; } }
+@keyframes lock { 0% { opacity: 0.2; transform: scale(0.97); } 30% { opacity: 1; } 55% { opacity: 0.4; } 100% { opacity: 1; transform: none; } }
+.verdict { font-weight: 500; }
+[hidden] { display: none !important; }
+.stack { display: flex; flex-direction: column; gap: 14px; }
+.btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btns button { border-color: var(--you); font-weight: 600; }
+.lanes { display: flex; flex-direction: column; gap: 8px; }
+.lanes button { display: flex; flex-direction: column; gap: 3px; border-color: var(--you); }
+.lanes .nm { font-family: var(--font-display); font-size: 24px; line-height: 1.1; color: var(--you); }
+.lanes .tr { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lanes .gd { font-size: 14px; margin-top: 4px; }
+.lanes .gd b { color: var(--them); font-weight: 600; }
+.refit { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.refit .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.refit button { border-color: var(--you); font-weight: 600; }
+.over { font-family: var(--font-display); font-size: 26px; line-height: 1.15; }
+.over.win { color: var(--you); }
+.over.loss { color: var(--them); }
+.codewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+pre { margin: 0; padding: 10px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre; }
+.log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.log li { display: flex; flex-direction: column; }
+.log .r { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+dl { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+dt { font-weight: 600; color: var(--storm); }
+dd { margin: 0; font-size: 14.5px; color: var(--ink); max-width: 62ch; }
+@media (prefers-reduced-motion: reduce) {
+  .grid.fired .cell, .grid.fired .cell.hit { animation: none; }
+  .meter i, .track .span { transition: none; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header id="top">
+    <h1>Quantum Corsairs</h1>
+    <p class="lede">You captain a pirate starship with an entangled targeting rig. Raid a trade ship, then face whoever answers her distress call. Tune your emitter, fire, and see which way reality collapses.</p>
+    <p class="tally" id="tally"></p>
+  </header>
+
+  <div class="stack" id="portUI">
+    <section class="card">
+      <h2>Port</h2>
+      <p class="played" id="portText"></p>
+      <div class="btns"><button type="button" id="upW"></button><button type="button" id="upS"></button></div>
+      <p class="small">Beam energy adds to the damage your lance deals. Barrier height cuts the damage you take while shield-side.</p>
+    </section>
+    <section class="card">
+      <h2>Sector chart: choose a prize</h2>
+      <div class="lanes" id="lanes"></div>
+      <p class="small">Trade ships call for help. Beat the trader, then either stand against her protector or jettison half the cargo and run. Damage carries into that second fight. Disabling a ship pays her full cargo, destroying her pays 40%.</p>
+    </section>
+  </div>
+
+  <div class="stack" id="battleUI">
+  <section class="ships" aria-label="Ship status">
+    <div class="ship you" id="shipYou"></div>
+    <div class="ship them" id="shipThem"></div>
+  </section>
+
+  <section class="card">
+    <h2>Enemy faction</h2>
+    <p class="habit" id="habit"></p>
+  </section>
+
+  <section class="card weather" aria-live="polite">
+    <h2>Coherence forecast for this round</h2>
+    <p class="state" id="wxState"></p>
+    <div class="fore">
+      <div class="top"><span>Bell-lock fidelity</span><b id="wxRange"></b></div>
+      <div class="track" aria-hidden="true"><span class="span" id="wxSpan"></span><span class="half"></span></div>
+      <div class="top"><span>0%</span><span>50%: phase tricks fail below this</span><span>100%</span></div>
+    </div>
+    <p class="small" id="wxText"></p>
+  </section>
+
+  <section class="card probe" aria-live="polite">
+    <h2>Probe scan</h2>
+    <div class="top">
+      <button type="button" id="scan">Scan their emitter</button>
+      <span class="count" id="scanCount"></span>
+    </div>
+    <p class="readout" id="scanOut"></p>
+  </section>
+
+  <section class="card">
+    <h2>Your orders</h2>
+    <div class="orders" id="orders">
+      <button type="button" data-move="H"><span class="nm">Hold harmonics</span><span class="gt">no gate</span><span class="ds">Shields at rest phase. A phase-shifted lance breaks against them.</span></button>
+      <button type="button" data-move="L"><span class="nm">Tunnelling lance</span><span class="gt">Y gate</span><span class="ds">All power to the lance. Punches through held harmonics.</span></button>
+      <button type="button" data-move="Q"><span class="nm">Conjugate shields</span><span class="gt">Z gate</span><span class="ds">Shield phase turned 90°. Throws a plain lance back at its sender.</span></button>
+      <button type="button" data-move="X"><span class="nm">Phase-shifted lance</span><span class="gt">X gate</span><span class="ds">Lance phase turned 90°. Slips through conjugate shields.</span></button>
+    </div>
+    <details>
+      <summary>Manual emitter tuning</summary>
+      <div class="inner">
+        <div class="slider">
+          <div class="top"><label for="theta">Lance power θ</label><output id="thetaOut" for="theta">90°</output></div>
+          <input type="range" id="theta" min="0" max="180" step="5" value="90">
+          <p class="small">0° keeps everything in the shields. 180° puts everything in the lance.</p>
+        </div>
+        <div class="slider">
+          <div class="top"><label for="phi">Shield phase φ</label><output id="phiOut" for="phi">45°</output></div>
+          <input type="range" id="phi" min="0" max="90" step="5" value="45">
+          <p class="small">Retunes the shields against an incoming lance. 90° is full conjugation.</p>
+        </div>
+        <div class="slider">
+          <div class="top"><label for="alpha">Lance phase α</label><output id="alphaOut" for="alpha">45°</output></div>
+          <input type="range" id="alpha" min="0" max="90" step="5" value="45">
+          <p class="small">Retunes the lance to get past their shield phase.</p>
+        </div>
+        <button type="button" class="primary" id="fireCustom">Fire with this tuning</button>
+      </div>
+    </details>
+  </section>
+
+  <section class="card" aria-live="polite">
+    <h2>Collapse report</h2>
+    <span class="tag" id="tag"></span>
+    <p class="over" id="over" hidden></p>
+    <p class="played" id="played"></p>
+    <div class="grid" id="grid" role="table" aria-label="Chance and damage for each way the two emitters can collapse"></div>
+    <p class="verdict" id="verdict"></p>
+    <button type="button" class="primary" id="next" hidden></button>
+    <button type="button" id="flee" style="text-align:center" hidden></button>
+    <details>
+      <summary>This round as a Qiskit circuit</summary>
+      <div class="inner">
+        <div class="codewrap"><pre id="code"></pre></div>
+        <button type="button" id="copy" style="text-align:center">Copy code</button>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Battle log</h2>
+    <ol class="log" id="log"></ol>
+    <p class="small" id="noLog">No shots fired yet.</p>
+  </section>
+
+  </div>
+
+  <section class="card">
+    <h2>What the technobabble really is</h2>
+    <dl>
+      <div><dt>Emitter</dt><dd>One qubit per ship. Until it fires it is in a superposition of a shield state (0) and a lance state (1).</dd></div>
+      <div><dt>Bell-lock</dt><dd>Entanglement. Locking on ties the two emitters into one shared quantum state, so your tuning changes what their emitter does.</dd></div>
+      <div><dt>Lance power</dt><dd>A rotation of the qubit between 0 and 1. It sets the odds of collapsing lance-side.</dd></div>
+      <div><dt>Shield phase and lance phase</dt><dd>The qubit's phase. Phase changes no odds on its own. Through the Bell-lock it makes the two tunings interfere, which is how a shield can turn a lance around.</dd></div>
+      <div><dt>Collapse</dt><dd>Measurement. Each round is measured once, and the result is random with the odds shown in the grid.</dd></div>
+      <div><dt>Beam energy and barrier height</dt><dd>Quantum tunnelling. A particle gets through a barrier more easily the higher its energy and the lower the barrier. Each ship has a rating for both, and yours can be refitted between battles.</dd></div>
+      <div><dt>Probe scan</dt><dd>Measurement back-action. Reading the emitter's power disturbs its phase, the property the probe did not measure. No probe can read both cleanly.</dd></div>
+      <div><dt>Coherence storm</dt><dd>Decoherence. Outside noise disturbs the emitters and breaks the entanglement. Without it, phase has nothing to interfere with and the fight turns classical: raw lance power wins.</dd></div>
+    </dl>
+  </section>
+</main>
+
+<script>
+/*ENGINE*/
+// State index = 2 * yourBit + theirBit. Complex numbers are [re, im].
+function cmul(a, b) { return [a[0]*b[0] - a[1]*b[1], a[0]*b[1] + a[1]*b[0]]; }
+function cadd(a, b) { return [a[0] + b[0], a[1] + b[1]]; }
+function gate(m) {
+  var c = Math.cos(m.t / 2), s = Math.sin(m.t / 2);
+  return [
+    [[Math.cos(m.p) * c, Math.sin(m.p) * c], [Math.cos(m.a) * s, Math.sin(m.a) * s]],
+    [[-Math.cos(m.a) * s, Math.sin(m.a) * s], [Math.cos(m.p) * c, -Math.sin(m.p) * c]]
+  ];
+}
+function outcomeProbs(a, b, gamma) {
+  var c = Math.cos(gamma / 2), s = Math.sin(gamma / 2);
+  var st = [[c, 0], [0, 0], [0, 0], [0, s]];
+  var UA = gate(a), UB = gate(b);
+  var out = [[0, 0], [0, 0], [0, 0], [0, 0]];
+  for (var i = 0; i < 4; i++) for (var j = 0; j < 4; j++) {
+    var amp = cmul(UA[i >> 1][j >> 1], UB[i & 1][j & 1]);
+    out[i] = cadd(out[i], cmul(amp, st[j]));
+  }
+  var dd = [out[3], [-out[2][0], -out[2][1]], [-out[1][0], -out[1][1]], out[0]];
+  var probs = [];
+  for (var k = 0; k < 4; k++) {
+    var f = cadd([c * out[k][0], c * out[k][1]], cmul([0, -s], dd[k]));
+    probs.push(f[0] * f[0] + f[1] * f[1]);
+  }
+  return probs;
+}
+// Per outcome: [hull damage to you, hull damage to them, systems lost by you, systems lost by them].
+// w = beam energy (adds to damage dealt when that ship's emitter collapses lance-side).
+// s = barrier height (cuts damage taken when that ship's emitter collapses shield-side).
+function dmgTable(y, t) {
+  function c(x) { return Math.max(0, x); }
+  return [
+    [c(2 - y.s), c(2 - t.s), 0, 0],
+    [c(5 + t.w - y.s), 0, 1, 0],
+    [0, c(5 + y.w - t.s), 0, 1],
+    [4 + t.w, 4 + y.w, 0, 0]
+  ];
+}
+/*END*/
+
+var PI = Math.PI;
+var MOVES = {
+  H: { name: "Hold harmonics", t: 0, p: 0, a: 0 },
+  L: { name: "Tunnelling lance", t: PI, p: 0, a: 0 },
+  Q: { name: "Conjugate shields", t: 0, p: PI / 2, a: 0 },
+  X: { name: "Phase-shifted lance", t: PI, p: 0, a: PI / 2 }
+};
+var KEYS = ["H", "L", "Q", "X"];
+var FOES = {
+  guild: { faction: "Merchants Guild", name: "Kepler's Purse", cls: "Merchants Guild freighter", hull: 24, sys: 3, w: 0, s: 2, loot: 800, tactic: "guild",
+    habit: "<b>Merchants Guild.</b> Always on defence. Mostly <b>conjugate shields</b> while the lock holds (3 rounds in 4), otherwise <b>held harmonics</b>. Held harmonics in a storm. Protected by the Bounty Hunters." },
+  fed: { faction: "Trade Federation", name: "Dirac's Dividend", cls: "Trade Federation hauler", hull: 28, sys: 3, w: 1, s: 2, loot: 1200, tactic: "fed",
+    habit: "<b>Trade Federation.</b> Always on defence. Leans on <b>held harmonics</b> (3 rounds in 5), with <b>conjugate shields</b> the rest of the time. Held harmonics in a storm. Protected by the Planetary Defence Force." },
+  corp: { faction: "Corp Fleet", name: "Planck's Margin", cls: "Corp Fleet bulk carrier", hull: 32, sys: 4, w: 1, s: 3, loot: 2000, tactic: "corp",
+    habit: "<b>Corp Fleet.</b> Always on defence, behind the tallest barriers in the sector. Splits evenly between <b>held harmonics</b> and <b>conjugate shields</b>, so only a probe tells them apart. Protected by the Corp Police." },
+  hunters: { faction: "Bounty Hunters", name: "Heisenberg", cls: "Bounty hunter cruiser", hull: 30, sys: 3, w: 2, s: 1, loot: 400, tactic: "hunter",
+    habit: "<b>Bounty Hunters.</b> Strategic. They study <b>your last three tunings</b> and the forecast, then fire the best counter. About one round in five they bluff." },
+  pdf: { faction: "Planetary Defence Force", name: "Born Rule", cls: "Defence Force corvette", hull: 28, sys: 3, w: 2, s: 0, loot: 300, tactic: "pdf",
+    habit: "<b>Planetary Defence Force.</b> Always attacks. Mostly a <b>tunnelling lance</b>, sometimes a <b>phase-shifted lance</b>, and a plain lance in a storm. Never tunes its shields." },
+  police: { faction: "Corp Police", name: "Pauli Exclusion", cls: "Corp Police interceptor", hull: 36, sys: 4, w: 3, s: 2, loot: 600, tactic: "police",
+    habit: "<b>Corp Police.</b> The most advanced ships in the sector. Each captain is either <b>drilled like the Defence Force</b> (always attacks) or <b>hired from the Bounty Hunters</b> (counters your last three tunings). You are not told which, so watch the first rounds." },
+  corsairs: { faction: "Rival Corsairs", name: "Schrödinger's Wake", cls: "Rival corsair raider", hull: 30, sys: 3, w: 1, s: 1, loot: 1000, tactic: "wild",
+    habit: "<b>Rival Corsairs.</b> Wildcards. <b>Any of the four tunings</b>, picked on a whim, storm or no storm. Nobody comes to their rescue." }
+};
+var LANES = [
+  { trade: "guild", guard: "hunters" },
+  { trade: "fed", guard: "pdf" },
+  { trade: "corp", guard: "police" },
+  { trade: "corsairs", guard: null }
+];
+var RANGES = { calm: [85, 100], front: [45, 90], storm: [0, 35] };
+var WX = {
+  calm:  { state: "Calm void", text: "The Bell-lock is holding. Phase tricks work as tuned." },
+  front: { state: "Decoherence front", text: "Stray fields are fraying the lock. Phase tricks may misfire, and a storm may follow." },
+  storm: { state: "Coherence storm", text: "The storm is measuring both emitters and the lock has collapsed. Phases wash out, so only lance power counts." }
+};
+var SHIP = { name: "The Uncollapsed", hull: 30, sys: 3 };
+var BIT = ["shield-side", "lance-side"];
+var SCANS = 3, KICK = 0.3, UP_MAX = 3;
+function upCost(level) { return 400 * level; }
+var state;
+var $ = function (id) { return document.getElementById(id); };
+
+function freshRaid() {
+  return { v: 6, phase: "port", loot: 0, prizes: 0, up: { w: 1, s: 1 }, you: null, them: null, foe: "", lane: 0, stage: 0,
+    tactic: "", gain: 0, round: 0, weather: "calm", last: null, log: [], over: null, scans: SCANS, plan: null, scan: null, hist: [] };
+}
+function startBattle(foeKey, lane, stage, carry) {
+  var f = FOES[foeKey];
+  state.phase = "battle"; state.foe = foeKey; state.lane = lane; state.stage = stage;
+  state.tactic = f.tactic === "police" ? (Math.random() < 0.5 ? "pdf" : "hunter") : f.tactic;
+  state.you = { hull: carry ? carry.hull : SHIP.hull, sys: carry ? carry.sys : SHIP.sys, w: state.up.w, s: state.up.s };
+  state.them = { hull: f.hull, sys: f.sys, w: f.w, s: f.s };
+  state.round = 0; state.weather = "calm"; state.last = null; state.log = []; state.over = null;
+  state.scans = SCANS; state.plan = null; state.scan = null; state.hist = [];
+}
+function toPort() {
+  state.phase = "port"; state.over = null; state.you = null; state.them = null; state.last = null; state.plan = null; state.scan = null;
+}
+function nextWeather(w) {
+  var r = Math.random();
+  if (w === "calm") return r < 0.28 ? "front" : "calm";
+  if (w === "front") return r < 0.7 ? "storm" : "calm";
+  return r < 0.4 ? "storm" : "calm";
+}
+function anyMove() { return MOVES[KEYS[Math.floor(Math.random() * 4)]]; }
+function enemyMove(mid) {
+  var t = state.tactic, calm = mid >= 50, r = Math.random();
+  if (t === "guild") return calm && r < 0.75 ? MOVES.Q : MOVES.H;     // trade factions: shields only
+  if (t === "fed") return calm && r < 0.4 ? MOVES.Q : MOVES.H;
+  if (t === "corp") return calm && r < 0.5 ? MOVES.Q : MOVES.H;
+  if (t === "pdf") return calm && r < 0.3 ? MOVES.X : MOVES.L;        // defence force drill: lances only
+  if (t === "wild") return anyMove();                                 // rival corsairs
+  if (r < 0.2) return anyMove();                                      // hunter tactics: bluff
+  if (!state.hist.length) return calm ? MOVES.Q : MOVES.L;
+  var best = MOVES.L, bestScore = -99, T = dmgTable(state.you, state.them);
+  KEYS.forEach(function (k) {
+    var sc = 0;
+    state.hist.forEach(function (h) {
+      var p = outcomeProbs(h, MOVES[k], mid / 100 * PI / 2);
+      for (var j = 0; j < 4; j++) sc += p[j] * (T[j][0] - T[j][1]);
+    });
+    if (sc > bestScore + 1e-9) { bestScore = sc; best = MOVES[k]; }
+  });
+  return best;
+}
+function near(x, y) { return Math.abs(x - y) < 1e-6; }
+function deg(x) { return Math.round(x * 180 / PI); }
+// Back-action of a probe: lance power is untouched, both phases are turned by 90 degrees.
+function kicked(m) {
+  var k = { t: m.t, p: PI / 2 - m.p, a: PI / 2 - m.a };
+  if (near(k.t, 0) && near(k.p, 0)) k.name = MOVES.H.name;
+  else if (near(k.t, 0) && near(k.p, PI / 2)) k.name = MOVES.Q.name;
+  else if (near(k.t, PI) && near(k.a, 0)) k.name = MOVES.L.name;
+  else if (near(k.t, PI) && near(k.a, PI / 2)) k.name = MOVES.X.name;
+  else k.name = "Kicked tuning (θ " + deg(k.t) + "°, φ " + deg(k.p) + "°, α " + deg(k.a) + "°)";
+  return k;
+}
+function ensurePlan() {
+  if (state.phase !== "battle" || state.over || state.plan) return;
+  var rg = RANGES[state.weather];
+  var m = enemyMove((rg[0] + rg[1]) / 2);
+  state.plan = { name: m.name, t: m.t, p: m.p, a: m.a };
+}
+function fmt(x) { return (Math.round(x * 10000) / 10000).toString(); }
+function uArgs(m) { return fmt(m.t) + ", " + fmt(PI - m.a - m.p) + ", " + fmt(PI + m.a - m.p); }
+function codeFor(r) {
+  return [
+    "from qiskit import QuantumCircuit",
+    "from qiskit_aer import AerSimulator",
+    "",
+    "gamma = " + fmt(r.E / 100 * PI / 2) + "  # Bell-lock fidelity " + r.E + "%",
+    "qc = QuantumCircuit(2)",
+    "qc.ryy(gamma, 0, 1)   # Bell-lock: entangle the emitters",
+    "qc.u(" + uArgs(r.a) + ", 0)   # you: " + r.a.name,
+    "qc.u(" + uArgs(r.b) + ", 1)   # them: " + r.b.name,
+    "qc.ryy(-gamma, 0, 1)  # undo the lock before readout",
+    "qc.measure_all()",
+    "",
+    "sim = AerSimulator()",
+    "counts = sim.run(qc, shots=1000).result().get_counts()",
+    "print(counts)  # bits read \"them, you\"; 0 = shield, 1 = lance"
+  ].join("\n");
+}
+
+function shipHtml(name, cls, cur, max, side) {
+  var pips = "";
+  for (var i = 0; i < max.sys; i++) pips += '<span class="' + (i < cur.sys ? "on" : "") + '"></span>';
+  var art = '<svg class="art' + (side === "them" ? " flip" : "") + '" viewBox="0 0 72 28" aria-hidden="true">' +
+    '<path class="jet" d="M0 14 L10 11 L10 17 Z"/>' +
+    '<path d="M10 9 L22 7 L48 7 L70 14 L48 21 L22 21 L10 19 Z"/>' +
+    '<path d="M20 7 L12 0 L24 0 L36 7 Z"/><path d="M20 21 L12 28 L24 28 L36 21 Z"/>' +
+    '<circle class="port" cx="52" cy="14" r="2.5"/></svg>';
+  return art + '<span class="cls">' + cls + '</span><span class="name">' + name + '</span>' +
+    '<div class="stat"><div class="row"><span>Hull</span><b>' + cur.hull + ' / ' + max.hull + '</b></div>' +
+    '<div class="meter"><i style="width:' + (cur.hull / max.hull * 100) + '%"></i></div></div>' +
+    '<div class="stat"><div class="row"><span>Beam energy</span><b>' + cur.w + '</b></div>' +
+    '<div class="row"><span>Barrier height</span><b>' + cur.s + '</b></div></div>' +
+    '<div class="stat"><div class="row"><span>Systems</span><b>' + cur.sys + ' / ' + max.sys + '</b></div>' +
+    '<div class="pips" role="img" aria-label="Systems ' + cur.sys + ' of ' + max.sys + '">' + pips + '</div></div>';
+}
+function renderGrid(probs, hit, T) {
+  var g = $("grid");
+  g.className = "grid" + (hit !== null ? " fired" : "");
+  var html = '<div></div><div class="head">Their emitter shield-side</div><div class="head">Their emitter lance-side</div>';
+  for (var r = 0; r < 2; r++) {
+    html += '<div class="rowhead">Yours ' + BIT[r] + '</div>';
+    for (var c = 0; c < 2; c++) {
+      var i = 2 * r + c, d = T[i];
+      var pct = probs ? Math.round(probs[i] * 100) : 0;
+      html += '<div class="cell' + (i === hit ? " hit" : "") + '">' +
+        '<span class="dmg"><span class="y">You −' + d[0] + (d[2] ? ", 1 system" : "") + '</span>' +
+        '<span class="t">They −' + d[1] + (d[3] ? ", 1 system" : "") + '</span></span>' +
+        '<span class="bar"><i style="width:' + pct + '%"></i></span>' +
+        '<span class="pct">' + (probs ? pct + "%" + (i === hit ? " collapsed here" : "") : "odds unknown") + '</span></div>';
+    }
+  }
+  g.innerHTML = html;
+}
+function verdictText(hit, foe, T) {
+  var d = T[hit];
+  if (hit === 0) return "Both emitters collapse shield-side. The volleys scatter off the barriers: you take " + d[0] + " and the " + foe + " takes " + d[1] + ".";
+  if (hit === 1) return "Your emitter collapses shield-side and theirs lance-side. Their lance tunnels through: you lose " + d[0] + " hull and one system.";
+  if (hit === 2) return "Your emitter collapses lance-side and theirs shield-side. Your lance tunnels clean through: the " + foe + " loses " + d[1] + " hull and one system.";
+  return "Both emitters collapse lance-side with barriers down. You take " + d[0] + " and the " + foe + " takes " + d[1] + ".";
+}
+function statLine(f) { return "hull " + f.hull + " · systems " + f.sys + " · beam " + f.w + " · barrier " + f.s; }
+function renderPort() {
+  $("portText").textContent = SHIP.name + " is repaired and ready: hull " + SHIP.hull + ", systems " + SHIP.sys +
+    ", beam energy " + state.up.w + ", barrier height " + state.up.s + ". You hold " + state.loot + " credits.";
+  [["upW", "w", "Beam energy"], ["upS", "s", "Barrier height"]].forEach(function (u) {
+    var lv = state.up[u[1]], b = $(u[0]);
+    b.textContent = lv >= UP_MAX ? u[2] + " " + lv + " (maximum)" : u[2] + " " + lv + " to " + (lv + 1) + " for " + upCost(lv) + " cr";
+    b.disabled = lv >= UP_MAX || state.loot < upCost(lv);
+  });
+  $("lanes").innerHTML = LANES.map(function (l, i) {
+    var t = FOES[l.trade], g = l.guard ? FOES[l.guard] : null;
+    return '<button type="button" data-lane="' + i + '"><span class="nm">' + t.faction + '</span>' +
+      '<span class="tr">' + t.cls + ' · cargo ' + t.loot + ' cr</span><span class="tr">' + statLine(t) + '</span>' +
+      (g ? '<span class="gd">Protected by <b>' + g.faction + '</b></span><span class="tr">' + statLine(g) + ' · bounty ' + g.loot + ' cr</span>'
+         : '<span class="gd">No protector answers</span>') + '</button>';
+  }).join("");
+}
+function render() {
+  var port = state.phase === "port";
+  $("portUI").hidden = !port;
+  $("battleUI").hidden = port;
+  $("tally").innerHTML = "Prizes taken " + state.prizes + " · Loot <b>" + state.loot + " cr</b>";
+  if (port) { renderPort(); return; }
+  var foe = FOES[state.foe];
+  ensurePlan();
+  $("scanCount").innerHTML = "Probes left: <b>" + state.scans + " of " + SCANS + "</b>";
+  $("scan").disabled = !!state.over || !!state.scan || state.scans <= 0;
+  if (state.over) $("scanOut").textContent = "The battle is over.";
+  else if (state.scan) $("scanOut").innerHTML = "Probe reads: <b>" + state.scan.shown + "</b>. Their lance power is certain. Their phase may have been turned 90° by the probe itself.";
+  else if (state.scans <= 0) $("scanOut").textContent = "No probes left for this battle.";
+  else $("scanOut").textContent = "A probe reads their tuning for this round. Its back-action turns their phase by 90° about 3 times in 10, and you only find out when the shot lands.";
+  $("shipYou").innerHTML = shipHtml(SHIP.name, "Your starship", state.you, SHIP, "you");
+  $("shipThem").innerHTML = shipHtml(foe.name, foe.cls, state.them, foe, "them");
+  $("habit").innerHTML = foe.habit;
+
+  var rg = RANGES[state.weather];
+  $("wxState").textContent = state.over ? "Guns silent" : WX[state.weather].state;
+  $("wxRange").textContent = state.over ? "no lock" : rg[0] + "% to " + rg[1] + "%";
+  $("wxSpan").style.left = (state.over ? 0 : rg[0]) + "%";
+  $("wxSpan").style.width = (state.over ? 0 : rg[1] - rg[0]) + "%";
+  $("wxText").textContent = state.over ? "The battle is over." : WX[state.weather].text;
+
+  var locked = !!state.over;
+  var btns = document.querySelectorAll("#orders button");
+  for (var i = 0; i < btns.length; i++) btns[i].disabled = locked;
+  $("fireCustom").disabled = locked;
+
+  var r = state.last;
+  $("tag").textContent = r ? "Round " + state.round : "Awaiting orders";
+  if (r) {
+    $("played").innerHTML = 'You: <span class="y">' + r.a.name + '</span>. ' + foe.name + ': <span class="t">' + r.b.name +
+      '</span>. The Bell-lock came in at ' + r.E + '% (' + WX[r.weather].state.toLowerCase() + ').' +
+      (r.scanned ? (r.kicked ? ' Your probe turned their phase: they had planned ' + r.planned + '.' : ' Your probe left their tuning undisturbed.') : '');
+    renderGrid(r.probs, r.hit, r.T);
+    $("verdict").textContent = verdictText(r.hit, foe.name, r.T);
+    $("code").textContent = codeFor(r);
+  } else {
+    $("played").textContent = (state.stage === 1 ? "The " + foe.name + " has answered the distress call. " : "The " + foe.name + " is in range. ") + "The emitters are locked.";
+    renderGrid(null, null, dmgTable(state.you, state.them));
+    $("verdict").textContent = "Choose a tuning to open fire. The grid shows the damage for each way the emitters can collapse.";
+    $("code").textContent = codeFor({ a: MOVES.Q, b: MOVES.L, E: 100 });
+  }
+  var o = $("over"), n = $("next"), fl = $("flee");
+  var guard = LANES[state.lane].guard;
+  var guardNext = !!state.over && state.over.win && state.stage === 0 && !!guard;
+  o.hidden = !state.over; n.hidden = !state.over; fl.hidden = !guardNext;
+  if (state.over) {
+    o.textContent = state.over.text;
+    o.className = "over " + (state.over.win ? "win" : "loss");
+    n.textContent = !state.over.win ? "Launch a new raid" : guardNext ? "Stand and fight the " + FOES[guard].cls : "Return to port";
+    if (guardNext) fl.textContent = "Jettison " + Math.floor(state.gain / 2) + " cr of cargo and run";
+  }
+  $("log").innerHTML = state.log.map(function (l, i) {
+    return '<li><span>' + (i + 1) + '. ' + l.a + ' against ' + l.b + '</span><span class="r">lock ' + l.E +
+      '% · you −' + l.y + ' · they −' + l.t + (l.s ? ' · scanned' : '') + '</span></li>';
+  }).join("");
+  $("noLog").hidden = state.log.length > 0;
+}
+
+function fire(m) {
+  if (state.phase !== "battle" || state.over) return;
+  var foe = FOES[state.foe];
+  var rg = RANGES[state.weather];
+  var E = Math.round(rg[0] + Math.random() * (rg[1] - rg[0]));
+  var a = { name: m.name, t: m.t, p: m.p, a: m.a };
+  var bm = state.plan;
+  var b = { name: bm.name, t: bm.t, p: bm.p, a: bm.a };
+  var probs = outcomeProbs(a, b, E / 100 * PI / 2);
+  var x = Math.random(), hit = 3, acc = 0;
+  for (var i = 0; i < 4; i++) { acc += probs[i]; if (x < acc) { hit = i; break; } }
+  var T = dmgTable(state.you, state.them), d = T[hit];
+  state.you.hull = Math.max(0, state.you.hull - d[0]);
+  state.them.hull = Math.max(0, state.them.hull - d[1]);
+  state.you.sys = Math.max(0, state.you.sys - d[2]);
+  state.them.sys = Math.max(0, state.them.sys - d[3]);
+  state.round += 1;
+  state.hist.push(a);
+  if (state.hist.length > 3) state.hist.shift();
+  var sc = state.scan;
+  state.last = { a: a, b: b, probs: probs, hit: hit, E: E, weather: state.weather, T: T,
+    scanned: !!sc, kicked: !!(sc && sc.kicked), planned: sc ? sc.shown : "" };
+  state.log.push({ a: a.name, b: b.name, E: E, y: d[0], t: d[1], s: !!sc });
+  state.plan = null;
+  state.scan = null;
+
+  var youDown = state.you.hull <= 0 || state.you.sys <= 0;
+  var themDown = state.them.hull <= 0 || state.them.sys <= 0;
+  if (youDown) {
+    state.over = { win: false, text: state.you.hull <= 0
+      ? SHIP.name + " breaks apart" + (themDown ? ", and takes the " + foe.name + " with her" : "") + ". The raid ends with " + state.loot + " credits."
+      : "Your systems are dark and the " + foe.name + " has you in a tractor beam. The raid ends with " + state.loot + " credits." };
+  } else if (themDown) {
+    var disabled = state.them.sys <= 0 && state.them.hull > 0;
+    var pay = disabled ? foe.loot : Math.round(foe.loot * 0.4);
+    var guard = state.stage === 0 ? LANES[state.lane].guard : null;
+    state.loot += pay; state.gain = pay; state.prizes += 1;
+    state.over = { win: true, text: (disabled
+      ? "The " + foe.name + " is disabled. You dock, board her and take the full " + pay + " credits."
+      : "The " + foe.name + " is destroyed. You salvage " + pay + " of her " + foe.loot + " credits from the wreck.") +
+      (guard ? " Her distress call got out: the " + FOES[guard].faction + " are inbound, and there is no time to repair." : "") };
+  } else {
+    state.weather = nextWeather(state.weather);
+  }
+  render();
+}
+
+$("orders").addEventListener("click", function (e) {
+  var btn = e.target.closest("button[data-move]");
+  if (btn && !btn.disabled) fire(MOVES[btn.dataset.move]);
+});
+$("lanes").addEventListener("click", function (e) {
+  var btn = e.target.closest("button[data-lane]");
+  if (!btn || state.phase !== "port") return;
+  var i = +btn.dataset.lane;
+  startBattle(LANES[i].trade, i, 0, null);
+  render();
+  $("battleUI").scrollIntoView({ block: "start" });
+});
+$("scan").addEventListener("click", function () {
+  if (state.over || state.scan || state.scans <= 0 || !state.plan) return;
+  state.scans -= 1;
+  state.scan = { shown: state.plan.name, kicked: Math.random() < KICK };
+  if (state.scan.kicked) state.plan = kicked(state.plan);
+  render();
+});
+$("fireCustom").addEventListener("click", function () {
+  var t = +$("theta").value, p = +$("phi").value, a = +$("alpha").value;
+  fire({ name: "Manual tuning (θ " + t + "°, φ " + p + "°, α " + a + "°)", t: t * PI / 180, p: p * PI / 180, a: a * PI / 180 });
+});
+["theta", "phi", "alpha"].forEach(function (id) {
+  $(id).addEventListener("input", function () { $(id + "Out").textContent = this.value + "°"; });
+});
+function buy(key) {
+  var lv = state.up[key];
+  if (state.phase !== "port" || lv >= UP_MAX || state.loot < upCost(lv)) return;
+  state.loot -= upCost(lv);
+  state.up[key] = lv + 1;
+  render();
+}
+$("upW").addEventListener("click", function () { buy("w"); });
+$("upS").addEventListener("click", function () { buy("s"); });
+$("next").addEventListener("click", function () {
+  if (!state.over) return;
+  var guard = LANES[state.lane].guard;
+  if (!state.over.win) state = freshRaid();
+  else if (state.stage === 0 && guard) startBattle(guard, state.lane, 1, { hull: state.you.hull, sys: state.you.sys });
+  else toPort();
+  render();
+  $("top").scrollIntoView({ block: "start" });
+});
+$("flee").addEventListener("click", function () {
+  if (!state.over || !state.over.win || state.stage !== 0) return;
+  state.loot -= Math.floor(state.gain / 2);
+  toPort();
+  render();
+  $("top").scrollIntoView({ block: "start" });
+});
+$("copy").addEventListener("click", function () {
+  var btn = this;
+  try {
+    navigator.clipboard.writeText($("code").textContent).then(
+      function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy code"; }, 1500); },
+      function () { btn.textContent = "Copy failed. Select the code instead."; }
+    );
+  } catch (err) { btn.textContent = "Copy failed. Select the code instead."; }
+});
+
+function start(saved) {
+  state = saved && saved.v === 6 && saved.up ? saved : freshRaid();
+  render();
+}
+var hot = window.claude && window.claude.hot;
+if (hot && hot.snapshot) hot.snapshot(function () { return state; });
+if (hot && hot.ready) hot.ready(start); else start((hot && hot.data) || {});
+</script>
+</body>
+</html>
