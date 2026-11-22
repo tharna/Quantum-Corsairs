@@ -202,7 +202,7 @@ class _TitleBlueprint extends StatelessWidget {
         ),
         Positioned(
           right: 0,
-          top: 30,
+          top: 20,
           child: Text('EMITTER', style: QC.monoStyle(10, color: QC.quantum)),
         ),
         Positioned(
