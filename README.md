@@ -46,8 +46,8 @@ cd packages/qc_core
 dart test
 dart run bin/simulate.dart --raids 1500
 
-# The game
-cd app
+# The game (from the repository root)
+cd ../../app
 flutter test
 flutter run                  # on a connected device or emulator
 flutter run -d chrome        # in the browser

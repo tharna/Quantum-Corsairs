@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:qc_core/qc_core.dart';
 import 'package:quantum_corsairs/controller.dart';
 import 'package:quantum_corsairs/main.dart';
@@ -125,7 +125,7 @@ void main() {
     a.newRaid();
     a.startLane(0);
     a.fire(TuningPreset.lance.tuning);
-    await Future<void>.delayed(Duration.zero);
+    await a.flushed;
 
     final b = _controller(store);
     await b.load();
@@ -140,4 +140,89 @@ void main() {
     expect(c.raid, isNull);
     expect(c.loaded, isTrue);
   });
+
+  test(
+    'writes land in order even when the store finishes out of order',
+    () async {
+      final store = _SlowStore();
+      final c = _controller(store, seed: 4);
+      await c.load();
+      c.newRaid(); // slow write
+      c.startLane(0); // fast write
+      await c.flushed;
+      final saved = GameState.fromJson(
+        jsonDecode(store.data['qc.save']!) as Map<String, Object?>,
+      );
+      expect(saved.raid!.phase, RaidPhase.battle);
+    },
+  );
+
+  test('reset is not undone by a pending save', () async {
+    final store = _SlowStore();
+    final c = _controller(store, seed: 5);
+    await c.load();
+    c.newRaid();
+    await c.resetProgress();
+    expect(store.data.containsKey('qc.save'), isFalse);
+  });
+
+  testWidgets('an unread report survives pausing to the title', (tester) async {
+    final c = _controller(_quietStore(), seed: 6);
+    await _pump(tester, c);
+    await tester.tap(find.text('BEGIN YOUR FIRST RAID'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('MERCHANTS GUILD'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tunnelling lance'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Back to title'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('CONTINUE RAID'));
+    await tester.pumpAndSettle();
+    expect(find.text('NEXT ROUND'), findsOneWidget);
+  });
+
+  testWidgets('screen readers can activate lanes and tunings', (tester) async {
+    final handle = tester.ensureSemantics();
+    final c = _controller(_quietStore(), seed: 7);
+    await _pump(tester, c);
+    await tester.tap(find.text('BEGIN YOUR FIRST RAID'));
+    await tester.pumpAndSettle();
+
+    final lane = find.semantics.byLabel(RegExp('^Merchants Guild'));
+    tester.semantics.tap(lane);
+    await tester.pumpAndSettle();
+    expect(c.raid!.phase, RaidPhase.battle);
+
+    final order = find.semantics.byLabel(RegExp('^Tunnelling lance'));
+    tester.semantics.tap(order);
+    await tester.pumpAndSettle();
+    expect(c.battle!.round, 1);
+    handle.dispose();
+  });
+
+  testWidgets('font licence texts are bundled', (tester) async {
+    for (final f in ['chakra-petch', 'ibm-plex-mono', 'ibm-plex-sans']) {
+      final text = await rootBundle.loadString('assets/fonts/OFL-$f.txt');
+      expect(text, contains('Open Font License'));
+    }
+  });
+}
+
+/// A store whose first write is slower than the ones after it.
+class _SlowStore extends MemoryStore {
+  int _writes = 0;
+
+  @override
+  Future<void> write(String key, String value) async {
+    final delay = _writes++ == 0 ? 30 : 1;
+    await Future<void>.delayed(Duration(milliseconds: delay));
+    data[key] = value;
+  }
+
+  @override
+  Future<void> remove(String key) async {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    data.remove(key);
+  }
 }

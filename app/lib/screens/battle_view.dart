@@ -19,9 +19,6 @@ class BattleView extends StatefulWidget {
 }
 
 class _BattleViewState extends State<BattleView> {
-  /// Rounds whose collapse report the player has dismissed.
-  int? _ackRound;
-
   void _fire(GameController c, Tuning t) {
     final report = c.fire(t);
     if (report != null) setState(() {});
@@ -48,8 +45,10 @@ class _BattleViewState extends State<BattleView> {
     final b = raid?.battle;
     // While the switcher fades this view out, the battle may already be gone.
     if (raid == null || b == null) return const SizedBox.expand();
-    _ackRound ??= b.result.isOver ? b.round - 1 : b.round;
-    final showingReport = b.round > _ackRound!;
+    // A battle reopened after a restart shows its latest report again, so a
+    // result the player had not read is never skipped.
+    final ack = c.acknowledgedRound ?? (b.round > 0 ? b.round - 1 : 0);
+    final showingReport = b.round > ack;
 
     final top = RaidTopBar(
       label:
@@ -63,7 +62,7 @@ class _BattleViewState extends State<BattleView> {
         topBar: top,
         battle: b,
         raid: raid,
-        onNext: () => setState(() => _ackRound = b.round),
+        onNext: () => c.acknowledgeReport(b.round),
       );
     }
 
@@ -334,6 +333,7 @@ class _OrderButton extends StatelessWidget {
   Widget build(BuildContext context) => Semantics(
     button: true,
     enabled: enabled,
+    onTap: enabled ? () => onTap(preset.tuning) : null,
     label: enabled
         ? '${preset.label}, ${preset.gate}. ${preset.description}'
         : '${preset.label}. Locked: take more prizes to learn it.',

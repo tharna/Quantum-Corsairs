@@ -24,6 +24,9 @@ flutter:
   uses-material-design: true
   assets:
     - assets/audio/
+    - assets/fonts/OFL-chakra-petch.txt
+    - assets/fonts/OFL-ibm-plex-mono.txt
+    - assets/fonts/OFL-ibm-plex-sans.txt
   fonts:
     - family: ChakraPetch
       fonts:

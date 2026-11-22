@@ -157,7 +157,36 @@ class GameController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _save() => _store.write(_gameKey, jsonEncode(_game.toJson()));
+  /// Persistence runs one operation at a time, in the order requested, so an
+  /// older snapshot can never overwrite a newer one and a reset cannot be
+  /// undone by a write that was still pending.
+  Future<void> _queue = Future<void>.value();
+
+  Future<void> _enqueue(Future<void> Function() op) {
+    _queue = _queue.then((_) => op()).catchError((Object e) {
+      debugPrint('save failed: $e');
+    });
+    return _queue;
+  }
+
+  /// Snapshots the state now and writes it in order.
+  Future<void> _save() {
+    final json = jsonEncode(_game.toJson());
+    return _enqueue(() => _store.write(_gameKey, json));
+  }
+
+  /// Completes when every queued write has finished.
+  Future<void> get flushed => _queue;
+
+  /// The battle round whose collapse report the player last dismissed. Kept
+  /// in memory so pausing to the title and back never skips an unread
+  /// report; after a restart the latest report is shown again.
+  int? acknowledgedRound;
+
+  void acknowledgeReport(int round) {
+    acknowledgedRound = round;
+    notifyListeners();
+  }
 
   void _apply(GameState next) {
     _game = next;
@@ -189,6 +218,7 @@ class GameController extends ChangeNotifier {
   }
 
   void startLane(int i) {
+    acknowledgedRound = 0;
     sfx(Sfx.tap);
     _apply(_game.startLane(i));
   }
@@ -226,6 +256,7 @@ class GameController extends ChangeNotifier {
   }
 
   void fightProtector() {
+    acknowledgedRound = 0;
     sfx(Sfx.tap);
     _apply(_game.fightProtector());
   }
@@ -252,7 +283,8 @@ class GameController extends ChangeNotifier {
   void updateSettings(Settings s) {
     _settings = s;
     notifyListeners();
-    _store.write(_settingsKey, jsonEncode(s.toJson()));
+    final json = jsonEncode(s.toJson());
+    _enqueue(() => _store.write(_settingsKey, json));
   }
 
   bool hintSeen(String id) => _settings.seenHints.contains(id);
@@ -264,9 +296,13 @@ class GameController extends ChangeNotifier {
   Future<void> resetProgress() async {
     _game = const GameState();
     _settings = _settings.copyWith(seenHints: {});
-    await _store.remove(_gameKey);
-    await _store.write(_settingsKey, jsonEncode(_settings.toJson()));
+    acknowledgedRound = null;
+    final json = jsonEncode(_settings.toJson());
     notifyListeners();
+    await _enqueue(() async {
+      await _store.remove(_gameKey);
+      await _store.write(_settingsKey, json);
+    });
   }
 }
 

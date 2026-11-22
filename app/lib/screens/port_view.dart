@@ -139,6 +139,7 @@ class _RefitButton extends StatelessWidget {
     return Semantics(
       button: true,
       enabled: can,
+      onTap: can ? () => c.buy(upgrade) : null,
       label:
           '${upgrade.label}. ${upgrade.description} Level ${owned + base} of $segments. $status',
       child: ExcludeSemantics(
@@ -218,6 +219,7 @@ class _LaneTile extends StatelessWidget {
     return Semantics(
       button: open,
       enabled: open,
+      onTap: open ? () => c.startLane(index) : null,
       label: open
           ? '${trade.name}. ${trade.shipClass}, cargo ${trade.loot} credits. $guardLine.'
           : '${trade.name}. Locked: take $need more ${need == 1 ? 'prize' : 'prizes'}.',
