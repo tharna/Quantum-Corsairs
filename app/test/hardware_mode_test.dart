@@ -131,7 +131,8 @@ GameController _controller({
     sounds: SoundBank(enabled: false),
     seeds: math.Random(1),
     tokens: MemoryTokenStore(token),
-    iqm: (cfg) => IqmResonanceClient(cfg, client: http),
+    iqm: (cfg) =>
+        IqmResonanceClient(cfg, client: http)..retryDelay = Duration.zero,
   );
 }
 
