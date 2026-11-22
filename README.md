@@ -56,6 +56,16 @@ flutter build web --release --no-web-resources-cdn
 
 Building for iOS needs a Mac with Xcode.
 
+### Play in the browser
+
+Every merge to `main` publishes the web build to GitHub Pages:
+
+**https://tharna.github.io/Quantum-Corsairs/**
+
+On an iPhone, open the link in Safari and choose Share › Add to Home Screen. The game then runs full-screen with its own icon, and keeps working offline after the first load. Haptics are not available in mobile Safari; everything else is.
+
+The deployment is `.github/workflows/pages.yml`. You can also start it by hand from the Actions tab.
+
 ### Android release APK
 
 Every merge to `main` builds a release APK in CI. Download it from the workflow run's **Artifacts** section (`android-release-apk`, kept for 90 days). Pull requests build one too, so a broken release build shows up before merging.
