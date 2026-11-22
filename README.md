@@ -56,6 +56,27 @@ flutter build web --release --no-web-resources-cdn
 
 Building for iOS needs a Mac with Xcode.
 
+### Android release APK
+
+Every merge to `main` builds a release APK in CI. Download it from the workflow run's **Artifacts** section (`android-release-apk`, kept for 90 days). Pull requests build one too, so a broken release build shows up before merging.
+
+Without signing secrets, the APK is signed with the debug key. Its file name ends in `-debug-signed.apk`. It installs fine for testing, but Google Play will not accept it. To sign with your own upload key, create one:
+
+```sh
+keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+```
+
+Then add these repository secrets under Settings › Secrets and variables › Actions:
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | Output of `base64 -w0 upload-keystore.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | `upload` |
+| `ANDROID_KEY_PASSWORD` | Key password |
+
+Signed builds end in `-signed.apk`. To build a signed APK locally, put the same values in `app/android/key.properties`. That file is gitignored, and the comment at the top of `app/android/app/build.gradle.kts` shows the format.
+
 ### Checking the physics against Qiskit
 
 `packages/qc_core/test/reference_vectors.json` holds 38 reference cases: all 16 preset pairings at full and zero fidelity, plus six arbitrary dial settings. The Dart tests check the engine against them. This script rebuilds each case as a Qiskit circuit, `ryy(γ) · (u ⊗ u) · ryy(−γ)`, and compares the results:
