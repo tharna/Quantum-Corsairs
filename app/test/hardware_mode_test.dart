@@ -69,12 +69,54 @@ MockClient _server({bool fail = false, List<http.Request>? log}) =>
       return http.Response('', 404);
     });
 
+/// A server whose job stays queued until it is cancelled.
+MockClient _stuck(List<http.Request> log) => MockClient((r) async {
+  log.add(r);
+  final p = r.url.path;
+  if (p.endsWith('/dynamic-quantum-architecture')) {
+    return http.Response(
+      jsonEncode({
+        'qubits': ['QB1', 'QB2'],
+        'gates': {
+          'cz': {
+            'implementations': {
+              'tgss': {
+                'loci': [
+                  ['QB1', 'QB2'],
+                ],
+              },
+            },
+          },
+        },
+      }),
+      200,
+    );
+  }
+  if (r.method == 'POST' && p.endsWith('/circuit')) {
+    return http.Response(jsonEncode({'job_id': 'slow'}), 200);
+  }
+  if (p.endsWith('/cancel')) return http.Response('', 200);
+  return http.Response(
+    jsonEncode({
+      'job_id': 'slow',
+      'job_status': 'pending_execution',
+      'position': 9,
+    }),
+    200,
+  );
+});
+
 GameController _controller({
   required http.Client http,
   String? token = 'tok',
   bool hardware = true,
+  bool veteran = false,
 }) {
   final store = MemoryStore()
+    ..data['qc.save'] = jsonEncode({
+      'v': 1,
+      'profile': {'prizes': veteran ? 10 : 0},
+    })
     ..data['qc.settings'] = jsonEncode(
       Settings(
         sound: false,
@@ -120,7 +162,7 @@ void main() {
       expect(r.hardware!.device, 'sirius');
       expect(r.hardware!.counts, [0, 1, 2, 1]);
       expect(r.fidelityPercent, b.pendingFidelity);
-      expect(c.qpuNotice, isNull);
+      expect(r.simulatedReason, isNull);
 
       final post = log.firstWhere((q) => q.method == 'POST');
       expect(post.headers['Authorization'], 'Bearer tok');
@@ -140,8 +182,7 @@ void main() {
       await _untilIdle(c);
       expect(c.battle!.round, 1);
       expect(c.battle!.last!.hardware, isNull);
-      expect(c.qpuNotice!.round, 1);
-      expect(c.qpuNotice!.message, contains('simulated'));
+      expect(c.battle!.last!.simulatedReason, contains('simulated'));
     },
   );
 
@@ -179,5 +220,46 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Measure on real hardware'), findsOneWidget);
     expect(find.text('Add an API token first'), findsOneWidget);
+  });
+
+  test('starting over while a round is queued abandons it cleanly', () async {
+    final log = <http.Request>[];
+    final c = _controller(http: _stuck(log));
+    await c.load();
+    c.newRaid();
+    c.startLane(0);
+    c.fire(TuningPreset.lance.tuning);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(c.qpu, isNotNull);
+
+    c.newRaid();
+    expect(c.qpu, isNull, reason: 'the new raid must not inherit the queue');
+    c.updateSettings(c.settings.copyWith(hardware: false));
+    c.startLane(0);
+    c.fire(TuningPreset.lance.tuning);
+    expect(c.battle!.round, 1, reason: 'the new battle can fire at once');
+
+    // The abandoned job is cancelled on the server and never touches the game.
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
+    expect(log.any((r) => r.url.path.endsWith('/jobs/slow/cancel')), isTrue);
+    expect(c.battle!.round, 1);
+    expect(c.battle!.last!.hardware, isNull);
+  });
+
+  test('the probe is blocked while a round is on the QPU', () async {
+    final c = _controller(http: _stuck(<http.Request>[]), veteran: true);
+    await c.load();
+    c.newRaid();
+    c.startLane(0);
+    expect(c.battle!.canProbe, isTrue);
+    c.fire(TuningPreset.lance.tuning);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final before = c.battle;
+    c.probe();
+    expect(identical(c.battle, before), isTrue, reason: 'probe ignored');
+    c.cancelHardware();
+    await _untilIdle(c);
+    expect(c.battle!.round, 1);
+    expect(c.battle!.last!.simulatedReason, contains('left the queue'));
   });
 }

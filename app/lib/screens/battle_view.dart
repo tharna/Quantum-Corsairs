@@ -123,7 +123,7 @@ class _BattleViewState extends State<BattleView> {
                     style: QC.monoStyle(10.5),
                   ),
                   if (profile.has(Unlock.probe))
-                    _ProbeRow(battle: b, onProbe: c.probe),
+                    _ProbeRow(battle: b, onProbe: c.probe, busy: c.qpu != null),
                 ],
               ),
               const SizedBox(height: 8),
@@ -327,9 +327,16 @@ class _LinkPainter extends CustomPainter {
 }
 
 class _ProbeRow extends StatelessWidget {
-  const _ProbeRow({required this.battle, required this.onProbe});
+  const _ProbeRow({
+    required this.battle,
+    required this.onProbe,
+    this.busy = false,
+  });
   final BattleState battle;
   final VoidCallback onProbe;
+
+  /// A round is on the quantum computer: the plan must not change now.
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -340,12 +347,14 @@ class _ProbeRow extends StatelessWidget {
         OutlinedButton(
           style: OutlinedButton.styleFrom(
             backgroundColor: QC.film,
-            side: BorderSide(color: battle.canProbe ? QC.coherence : QC.grid),
+            side: BorderSide(
+              color: battle.canProbe && !busy ? QC.coherence : QC.grid,
+            ),
             shape: const RoundedRectangleBorder(borderRadius: QC.radius),
             minimumSize: const Size.fromHeight(44),
             padding: const EdgeInsets.symmetric(horizontal: 10),
           ),
-          onPressed: battle.canProbe ? onProbe : null,
+          onPressed: battle.canProbe && !busy ? onProbe : null,
           child: Row(
             children: [
               const Icon(Icons.radar, size: 18, color: QC.coherence),

@@ -141,18 +141,15 @@ class SoundBank {
 
 /// A round waiting on the quantum computer.
 class QpuRun {
-  QpuRun(this.device, this.tuning);
+  QpuRun(this.device, this.tuning, this.battle);
   final String device;
   final Tuning tuning;
+
+  /// The battle state the round was fired from. The result only applies
+  /// while the game is still in exactly this state.
+  final BattleState battle;
   final IqmCancellation cancellation = IqmCancellation();
   IqmProgress progress = const IqmProgress('submitting');
-}
-
-/// Why a round that should have run on hardware was simulated instead.
-class QpuNotice {
-  const QpuNotice(this.round, this.message);
-  final int round;
-  final String message;
 }
 
 /// Owns the [GameState], applies actions, saves after every one, and fires
@@ -182,9 +179,6 @@ class GameController extends ChangeNotifier {
 
   /// The round currently running on quantum hardware, if any.
   QpuRun? qpu;
-
-  /// Set when the latest round fell back to the simulator.
-  QpuNotice? qpuNotice;
 
   bool get hasIqmToken => _iqmToken.trim().isNotEmpty;
 
@@ -256,6 +250,10 @@ class GameController extends ChangeNotifier {
   }
 
   void _apply(GameState next) {
+    // Any change that replaces the battle abandons a pending hardware round.
+    if (qpu != null && !identical(next.raid?.battle, qpu!.battle)) {
+      _detachQpu();
+    }
     _game = next;
     notifyListeners();
     _save();
@@ -290,8 +288,16 @@ class GameController extends ChangeNotifier {
     _apply(_game.startLane(i));
   }
 
+  /// Cancels a pending hardware round and forgets it. Its result, if one
+  /// still arrives, is ignored.
+  void _detachQpu() {
+    qpu?.cancellation.cancel();
+    qpu = null;
+  }
+
   void probe() {
-    if (!(battle?.canProbe ?? false)) return;
+    // Probing changes the battle, which would orphan a round on the QPU.
+    if (qpu != null || !(battle?.canProbe ?? false)) return;
     sfx(Sfx.probe);
     buzz();
     _apply(_game.probe());
@@ -320,11 +326,12 @@ class GameController extends ChangeNotifier {
 
   Future<void> _fireOnHardware(Tuning t) async {
     final b = battle!;
-    final run = QpuRun(_settings.iqmComputer, t);
+    final run = QpuRun(_settings.iqmComputer, t, b);
     qpu = run;
-    qpuNotice = null;
     sfx(Sfx.probe);
     notifyListeners();
+    // Only the run that is still current may touch the game.
+    bool current() => identical(qpu, run) && identical(battle, b);
     final client = _iqmFactory(_iqmConfig());
     try {
       final ops = compileRound(t, b.plan, b.pendingFidelity / 100);
@@ -332,13 +339,13 @@ class GameController extends ChangeNotifier {
         ops,
         cancellation: run.cancellation,
         onProgress: (p) {
+          if (!identical(qpu, run)) return;
           run.progress = p;
           notifyListeners();
         },
       );
+      if (!current()) return;
       qpu = null;
-      // The game may have moved on (reset, new raid) while we waited.
-      if (!identical(battle, b)) return notifyListeners();
       _resolve(
         t,
         measured: r.shots.first,
@@ -351,21 +358,32 @@ class GameController extends ChangeNotifier {
         ),
       );
     } catch (e) {
+      if (!current()) return;
       qpu = null;
-      if (!identical(battle, b)) return notifyListeners();
       final why = run.cancellation.isCancelled
           ? 'You left the queue'
           : 'The quantum computer was unavailable: $e';
-      qpuNotice = QpuNotice(b.round + 1, '$why. This round was simulated.');
-      _resolve(t);
+      _resolve(t, simulatedReason: '$why. This round was simulated.');
     } finally {
       client.close();
     }
   }
 
-  void _resolve(Tuning t, {Outcome? measured, HardwareRun? hardware}) {
+  void _resolve(
+    Tuning t, {
+    Outcome? measured,
+    HardwareRun? hardware,
+    String? simulatedReason,
+  }) {
     final unlockBefore = _game.profile.unlockLevel;
-    _apply(_game.fire(t, measured: measured, hardware: hardware));
+    _apply(
+      _game.fire(
+        t,
+        measured: measured,
+        hardware: hardware,
+        simulatedReason: simulatedReason,
+      ),
+    );
     final report = battle!.last!;
     sfx(Sfx.collapse);
     buzz(heavy: true);
@@ -452,6 +470,7 @@ class GameController extends ChangeNotifier {
   );
 
   Future<void> resetProgress() async {
+    _detachQpu();
     _game = const GameState();
     _settings = _settings.copyWith(seenHints: {});
     acknowledgedRound = null;

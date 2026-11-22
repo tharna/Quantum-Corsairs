@@ -305,4 +305,92 @@ void main() {
     expect(route.resonator, isNull);
     expect(route.czLocus, ['QB1', 'QB2']);
   });
+
+  test('the token is never sent over plain HTTP', () async {
+    final s = _FakeServer();
+    final c = IqmResonanceClient(
+      const IqmConfig(token: 't', serverUrl: 'http://resonance.example.com'),
+      client: s.client,
+    );
+    await expectLater(
+      c.route(),
+      throwsA(
+        isA<IqmException>().having(
+          (e) => e.message,
+          'message',
+          contains('https://'),
+        ),
+      ),
+    );
+    expect(s.requests, isEmpty);
+  });
+
+  test('a failed status request cancels the submitted job', () async {
+    final requests = <http.Request>[];
+    var submitted = false;
+    final flaky = MockClient((r) async {
+      requests.add(r);
+      final p = r.url.path;
+      if (p.endsWith('/dynamic-quantum-architecture')) {
+        return http.Response(jsonEncode(_dqa), 200);
+      }
+      if (r.method == 'POST' && p.endsWith('/circuit')) {
+        submitted = true;
+        return http.Response(jsonEncode({'job_id': 'job-9'}), 200);
+      }
+      if (p.endsWith('/cancel')) return http.Response('', 200);
+      return http.Response('boom', 500);
+    });
+    final c = IqmResonanceClient(const IqmConfig(token: 't'), client: flaky);
+    await expectLater(
+      c.runRound(ops, pollInterval: Duration.zero),
+      throwsA(isA<IqmException>()),
+    );
+    expect(submitted, isTrue);
+    // Awaited before the error surfaces, not left running.
+    expect(requests.last.url.path, '/api/v1/jobs/job-9/cancel');
+  });
+
+  test('leaving the queue during the final download still simulates', () async {
+    final s = _FakeServer();
+    final cancel = IqmCancellation();
+    final c = _client(s);
+    await expectLater(
+      c.runRound(
+        ops,
+        cancellation: cancel,
+        pollInterval: Duration.zero,
+        onProgress: (p) {
+          if (p.status == 'ready') cancel.cancel();
+        },
+      ),
+      throwsA(
+        isA<IqmException>().having((e) => e.message, 'message', 'Cancelled.'),
+      ),
+    );
+  });
+
+  test('measurements that are not single 0/1 bits are rejected', () {
+    for (final bad in [
+      [2],
+      [-1],
+      [0.5],
+      <int>[],
+      [0, 1],
+      1,
+    ]) {
+      expect(
+        () => IqmResonanceClient.parseShots([
+          {
+            'you': [bad],
+            'them': [
+              [0],
+            ],
+          },
+        ]),
+        throwsA(isA<IqmException>()),
+        reason: '$bad',
+      );
+    }
+  });
 }

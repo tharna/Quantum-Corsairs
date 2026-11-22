@@ -195,10 +195,10 @@ class _CollapseViewState extends State<CollapseView>
                   if (r.hardware != null) ...[
                     const SizedBox(height: 10),
                     _HardwarePanel(report: r),
-                  ] else if (c.qpuNotice?.round == r.round) ...[
+                  ] else if (r.simulatedReason != null) ...[
                     const SizedBox(height: 10),
                     Text(
-                      c.qpuNotice!.message,
+                      r.simulatedReason!,
                       style: const TextStyle(fontSize: 13, color: QC.them),
                     ),
                   ],

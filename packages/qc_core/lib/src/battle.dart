@@ -125,6 +125,7 @@ class RoundReport {
     this.probe,
     this.table = const [],
     this.hardware,
+    this.simulatedReason,
   });
 
   final int round;
@@ -143,6 +144,10 @@ class RoundReport {
   /// Set when the outcome was measured on quantum hardware.
   final HardwareRun? hardware;
 
+  /// Set when the round was meant for hardware but was simulated, with the
+  /// reason shown to the player.
+  final String? simulatedReason;
+
   Map<String, Object?> toJson() => {
     'round': round,
     'you': you.toJson(),
@@ -157,6 +162,7 @@ class RoundReport {
     ],
     if (probe != null) 'probe': probe!.toJson(),
     if (hardware != null) 'hw': hardware!.toJson(),
+    if (simulatedReason != null) 'sim': simulatedReason,
   };
 
   static Damage _dmg(List<Object?> d) => Damage(
@@ -188,6 +194,7 @@ class RoundReport {
       hardware: j['hw'] == null
           ? null
           : HardwareRun.fromJson(j['hw'] as Map<String, Object?>),
+      simulatedReason: j['sim'] as String?,
     );
   }
 }
@@ -367,7 +374,12 @@ class BattleState {
   /// The outcome is sampled from the simulated probabilities, unless
   /// [measured] gives the outcome a quantum computer measured for this exact
   /// round (see [compileRound] with [plan] and [pendingFidelity]).
-  BattleState fire(Tuning tuning, {Outcome? measured, HardwareRun? hardware}) {
+  BattleState fire(
+    Tuning tuning, {
+    Outcome? measured,
+    HardwareRun? hardware,
+    String? simulatedReason,
+  }) {
     if (result.isOver) throw StateError('Battle is over');
     final rng = Rng(rngState);
     final fidelity = pendingFidelity;
@@ -390,6 +402,7 @@ class BattleState {
       probe: scan,
       table: t,
       hardware: measured == null ? null : hardware,
+      simulatedReason: measured == null ? simulatedReason : null,
     );
 
     var res = BattleResult.ongoing;
@@ -495,8 +508,7 @@ class BattleState {
     round: j['round'] as int,
     weather: Weather.values.byName(j['wx'] as String),
     plan: Tuning.fromJson(j['plan'] as Map<String, Object?>),
-    pendingFidelity:
-        j['pf'] as int? ?? Weather.values.byName(j['wx'] as String).maxPercent,
+    pendingFidelity: j['pf'] as int? ?? _legacyFidelity(j).$1,
     history: List.unmodifiable([
       for (final h in j['hist'] as List<Object?>)
         Tuning.fromJson(h as Map<String, Object?>),
@@ -517,6 +529,15 @@ class BattleState {
         TuningPreset.values.byName(a as String),
     },
     result: BattleResult.values.byName(j['result'] as String),
-    rngState: j['rng'] as int,
+    rngState: j['pf'] != null ? j['rng'] as int : _legacyFidelity(j).$2,
   );
+
+  /// Saves from before [pendingFidelity] existed drew the fidelity at the
+  /// start of fire(). Draw it the same way from the saved generator, so the
+  /// resumed round uses the same fidelity and random draws it would have.
+  static (int, int) _legacyFidelity(Map<String, Object?> j) {
+    final rng = Rng(j['rng'] as int);
+    final f = Weather.values.byName(j['wx'] as String).drawPercent(rng);
+    return (f, rng.state);
+  }
 }

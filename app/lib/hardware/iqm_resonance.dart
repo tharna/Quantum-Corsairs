@@ -140,9 +140,25 @@ class IqmResonanceClient {
 
   static const _terminal = {'ready', 'failed', 'aborted'};
 
+  /// The API token is only ever sent over HTTPS. Plain HTTP is accepted for
+  /// a server on this machine (localhost), as the official client does.
   Uri _uri(String path) {
     final root = config.serverUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    return Uri.parse('$root/api/v1/$path');
+    final uri = Uri.tryParse('$root/api/v1/$path');
+    if (uri == null || uri.host.isEmpty) {
+      throw IqmException(
+        '"${config.serverUrl}" is not a valid server address.',
+      );
+    }
+    final local =
+        uri.host == 'localhost' || uri.host == '127.0.0.1' || uri.host == '::1';
+    if (uri.scheme != 'https' && !(uri.scheme == 'http' && local)) {
+      throw IqmException(
+        'The server address must start with https:// so the API token is '
+        'encrypted in transit (got "${config.serverUrl}").',
+      );
+    }
+    return uri;
   }
 
   Map<String, String> get _headers => {
@@ -164,9 +180,7 @@ class IqmResonanceClient {
         req.headers['Content-Type'] = 'application/json; charset=UTF-8';
         req.body = jsonEncode(body);
       }
-      r = await http.Response.fromStream(
-        await _http.send(req).timeout(timeout),
-      );
+      r = await _http.send(req).then(http.Response.fromStream).timeout(timeout);
     } on TimeoutException {
       throw const IqmException('IQM Resonance did not answer in time.');
     } on http.ClientException catch (e) {
@@ -358,38 +372,53 @@ class IqmResonanceClient {
       throw const IqmException('IQM Resonance did not return a job ID.');
     }
 
-    var wait = pollInterval;
-    while (true) {
-      if (cancellation?.isCancelled ?? false) {
-        unawaited(_cancelQuietly(jobId));
-        throw const IqmException('Cancelled.');
-      }
-      if (DateTime.now().isAfter(deadline)) {
-        unawaited(_cancelQuietly(jobId));
-        throw IqmException(
-          'The job did not finish within ${config.timeout.inSeconds} s.',
+    // From here on the job exists on the server: any way out other than a
+    // finished result cancels it, and waits for that before returning.
+    var finished = false;
+    try {
+      var wait = pollInterval;
+      while (true) {
+        _checkCancelled(cancellation);
+        if (DateTime.now().isAfter(deadline)) {
+          throw IqmException(
+            'The job did not finish within ${config.timeout.inSeconds} s.',
+          );
+        }
+        final j = await _send('GET', 'jobs/$jobId');
+        final status = j is Map
+            ? '${j['job_status'] ?? j['status'] ?? ''}'
+            : '';
+        final position = j is Map ? j['position'] as int? : null;
+        onProgress?.call(
+          IqmProgress(status, queuePosition: position, jobId: jobId),
         );
+        if (status == 'ready') break;
+        if (_terminal.contains(status)) {
+          finished = true; // nothing left to cancel
+          final err = j is Map ? j['job_error'] : null;
+          final msg = err is Map
+              ? (err['user_error_message'] ?? err['full_error_log'])
+              : null;
+          throw IqmException('The job $status${msg == null ? '' : ': $msg'}');
+        }
+        await Future<void>.delayed(wait);
+        if (wait < const Duration(seconds: 5)) wait *= 2;
       }
-      final j = await _send('GET', 'jobs/$jobId');
-      final status = j is Map ? '${j['job_status'] ?? j['status'] ?? ''}' : '';
-      final position = j is Map ? j['position'] as int? : null;
-      onProgress?.call(
-        IqmProgress(status, queuePosition: position, jobId: jobId),
-      );
-      if (status == 'ready') break;
-      if (_terminal.contains(status)) {
-        final err = j is Map ? j['job_error'] : null;
-        final msg = err is Map
-            ? (err['user_error_message'] ?? err['full_error_log'])
-            : null;
-        throw IqmException('The job $status${msg == null ? '' : ': $msg'}');
-      }
-      await Future<void>.delayed(wait);
-      if (wait < const Duration(seconds: 5)) wait *= 2;
+      finished = true;
+      _checkCancelled(cancellation);
+      final m = await _send('GET', 'jobs/$jobId/artifacts/measurements');
+      final shots = parseShots(m);
+      // The player may have left the queue while the results downloaded.
+      _checkCancelled(cancellation);
+      return IqmRoundResult(jobId: jobId, qubits: pair, shots: shots);
+    } catch (_) {
+      if (!finished) await _cancelQuietly(jobId);
+      rethrow;
     }
+  }
 
-    final m = await _send('GET', 'jobs/$jobId/artifacts/measurements');
-    return IqmRoundResult(jobId: jobId, qubits: pair, shots: parseShots(m));
+  static void _checkCancelled(IqmCancellation? c) {
+    if (c?.isCancelled ?? false) throw const IqmException('Cancelled.');
   }
 
   /// Turns the measurements artifact (one map per circuit, measurement key →
@@ -413,14 +442,22 @@ class IqmResonanceClient {
     ];
   }
 
+  /// One shot of one single-qubit measurement: exactly `[0]` or `[1]`.
   static int _bit(Object? shot) {
-    final v = shot is List ? shot.first : shot;
-    return (v as num).toInt() == 0 ? 0 : 1;
+    if (shot is List && shot.length == 1) {
+      final v = shot.first;
+      if (v == 0 || v == 1) return v as int;
+    }
+    throw IqmException('The job returned an invalid measurement: $shot');
   }
 
   Future<void> _cancelQuietly(String jobId) async {
     try {
-      await _send('POST', 'jobs/$jobId/cancel');
+      await _send(
+        'POST',
+        'jobs/$jobId/cancel',
+        timeout: const Duration(seconds: 10),
+      );
     } catch (_) {}
   }
 
