@@ -623,4 +623,138 @@ void main() {
     // 400 ms budget; the 30 s request timeout and 5 s backoff are capped.
     expect(watch.elapsed, lessThan(const Duration(seconds: 3)));
   });
+
+  group('IQM Server job format (status / queue_position / errors)', () {
+    MockClient server(
+      List<Map<String, Object?>> jobStates, {
+      List<http.Request>? log,
+    }) {
+      var polls = 0;
+      return MockClient((r) async {
+        log?.add(r);
+        final p = r.url.path;
+        if (p.endsWith('/dynamic-quantum-architecture')) {
+          return http.Response(jsonEncode(_dqa), 200);
+        }
+        if (r.method == 'POST' && p.endsWith('/circuit')) {
+          // The IQM Server answers with JobData: `id`, not `job_id`.
+          return http.Response(
+            jsonEncode({
+              'id': '01a20313-166c-723f-b29c-e3f1322b1afe',
+              'type': 'circuit',
+              'status': 'waiting',
+            }),
+            200,
+          );
+        }
+        if (p.endsWith('/artifacts/measurements')) {
+          return http.Response(
+            jsonEncode([
+              {
+                'you': [
+                  [0],
+                ],
+                'them': [
+                  [1],
+                ],
+              },
+            ]),
+            200,
+          );
+        }
+        if (p.endsWith('/cancel')) return http.Response('', 200);
+        final state =
+            jobStates[polls < jobStates.length ? polls : jobStates.length - 1];
+        polls++;
+        return http.Response(jsonEncode(state), 200);
+      });
+    }
+
+    test('a job that reports "completed" is read, not timed out', () async {
+      final log = <http.Request>[];
+      final progress = <String>[];
+      final r =
+          await IqmResonanceClient(
+            const IqmConfig(token: 't', timeout: Duration(seconds: 5)),
+            client: server([
+              {
+                'id': 'x',
+                'type': 'circuit',
+                'status': 'waiting',
+                'queue_position': 3,
+              },
+              {'id': 'x', 'type': 'circuit', 'status': 'processing'},
+              {
+                'id': 'x',
+                'type': 'circuit',
+                'status': 'completed',
+                'artifacts': [
+                  {'type': 'measurements'},
+                ],
+              },
+            ], log: log),
+          ).runRound(
+            ops,
+            pollInterval: Duration.zero,
+            onProgress: (p) => progress.add(p.label),
+          );
+      expect(r.jobId, '01a20313-166c-723f-b29c-e3f1322b1afe');
+      expect(r.shots, [Outcome.theyLance]);
+      expect(
+        progress,
+        containsAllInOrder([
+          'Queued, position 3',
+          'Running on the QPU',
+          'Done',
+        ]),
+      );
+      expect(log.any((q) => q.url.path.endsWith('/cancel')), isFalse);
+    });
+
+    test('a failed job reports the messages from its errors list', () async {
+      await expectLater(
+        IqmResonanceClient(
+          const IqmConfig(token: 't'),
+          client: server([
+            {
+              'id': 'x',
+              'type': 'circuit',
+              'status': 'failed',
+              'errors': [
+                {
+                  'error_code': 'validation',
+                  'message': 'locus QB9 not calibrated',
+                },
+              ],
+            },
+          ]),
+        ).runRound(ops, pollInterval: Duration.zero),
+        throwsA(
+          isA<IqmException>().having(
+            (e) => e.message,
+            'message',
+            contains('locus QB9 not calibrated'),
+          ),
+        ),
+      );
+    });
+
+    test('a cancelled job is final too', () async {
+      await expectLater(
+        IqmResonanceClient(
+          const IqmConfig(token: 't', timeout: Duration(seconds: 5)),
+          client: server([
+            {'id': 'x', 'type': 'circuit', 'status': 'cancelled'},
+          ]),
+        ).runRound(ops, pollInterval: Duration.zero),
+        throwsA(
+          isA<IqmException>().having(
+            (e) => e.message,
+            'message',
+            contains('cancelled'),
+          ),
+        ),
+      );
+    });
+  });
 }

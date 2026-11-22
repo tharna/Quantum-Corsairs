@@ -119,7 +119,9 @@ class IqmProgress {
       'post_processing_pending' ||
       'post_processing_started' ||
       'post_processing_ended' => 'Reading out',
-      'ready' => 'Done',
+      'waiting' => 'Waiting for the QPU',
+      'processing' => 'Running on the QPU',
+      'ready' || 'completed' => 'Done',
       _ => status.replaceAll('_', ' '),
     };
   }
@@ -163,7 +165,35 @@ class IqmResonanceClient {
   final http.Client _http;
   IqmRoute? _route;
 
-  static const _terminal = {'ready', 'failed', 'aborted'};
+  /// Job statuses that mean the results are ready. The IQM Server API
+  /// reports `completed`; older station-control servers reported `ready`.
+  static const _done = {'completed', 'ready'};
+
+  /// Job statuses that will never change again.
+  static const _terminal = {..._done, 'failed', 'cancelled', 'aborted'};
+
+  /// Reads a job's status, queue position and error text, accepting both the
+  /// IQM Server format (`status`, `queue_position`, `errors`) and the older
+  /// station-control format (`job_status`, `position`, `job_error`).
+  static (String, int?, String?) _jobState(Object? j) {
+    if (j is! Map) return ('', null, null);
+    final status = '${j['status'] ?? j['job_status'] ?? ''}'.toLowerCase();
+    final position = (j['queue_position'] ?? j['position']) as int?;
+    String? error;
+    final errors = j['errors'];
+    if (errors is List && errors.isNotEmpty) {
+      error = errors
+          .map(
+            (e) => e is Map ? '${e['message'] ?? e['error_code'] ?? e}' : '$e',
+          )
+          .join('; ');
+    } else if (j['job_error'] is Map) {
+      final e = j['job_error'] as Map;
+      error = '${e['user_error_message'] ?? e['full_error_log'] ?? ''}';
+      if (error.isEmpty) error = null;
+    }
+    return (status, position, error);
+  }
 
   /// The API token is only ever sent over HTTPS. Plain HTTP is accepted for
   /// a server on this machine (localhost), as the official client does.
@@ -501,21 +531,16 @@ class IqmResonanceClient {
           continue;
         }
         lastBlip = null;
-        final status = j is Map
-            ? '${j['job_status'] ?? j['status'] ?? ''}'
-            : '';
-        final position = j is Map ? j['position'] as int? : null;
+        final (status, position, error) = _jobState(j);
         onProgress?.call(
           IqmProgress(status, queuePosition: position, jobId: jobId),
         );
-        if (status == 'ready') break;
+        if (_done.contains(status)) break;
         if (_terminal.contains(status)) {
           finished = true; // nothing left to cancel
-          final err = j is Map ? j['job_error'] : null;
-          final msg = err is Map
-              ? (err['user_error_message'] ?? err['full_error_log'])
-              : null;
-          throw IqmException('The job $status${msg == null ? '' : ': $msg'}');
+          throw IqmException(
+            'The job $status${error == null ? '' : ': $error'}',
+          );
         }
         await _sleepUntil(wait, deadline);
         if (wait < const Duration(seconds: 5)) wait *= 2;
