@@ -72,7 +72,7 @@ class _FakeServer {
     if (p.endsWith('/dynamic-quantum-architecture')) {
       return http.Response(jsonEncode(_dqa), 200);
     }
-    if (r.method == 'POST' && p.endsWith('/jobs/garnet/circuit')) {
+    if (r.method == 'POST' && p.endsWith('/jobs/sirius/circuit')) {
       return http.Response(
         jsonEncode({'job_id': 'job-42', 'job_status': 'received'}),
         200,
@@ -120,13 +120,16 @@ void main() {
     expect(await _client(s).qubitPair(), ('QB1', 'QB2'));
     expect(
       s.requests.single.url.toString(),
-      'https://resonance.iqm.tech/api/v1/calibration-sets/garnet/default/dynamic-quantum-architecture',
+      'https://resonance.iqm.tech/api/v1/calibration-sets/sirius/default/dynamic-quantum-architecture',
     );
     expect(s.requests.single.headers['Authorization'], 'Bearer secret-token');
   });
 
   test('job body uses native operations on physical qubits', () {
-    final body = _client(_FakeServer()).jobBody(ops, ('QB1', 'QB2'));
+    final body = _client(_FakeServer()).jobBody(
+      ops,
+      const IqmRoute(you: 'QB1', them: 'QB2', czLocus: ['QB1', 'QB2']),
+    );
     expect(body['shots'], 3);
     final circuit = (body['circuits'] as List).single as Map;
     final instr = circuit['instructions'] as List;
@@ -163,7 +166,7 @@ void main() {
     expect(r.counts, [0, 1, 2, 0]);
     expect(progress, contains('Queued, position 2'));
     final post = s.requests.firstWhere((q) => q.method == 'POST');
-    expect(post.url.path, '/api/v1/jobs/garnet/circuit');
+    expect(post.url.path, '/api/v1/jobs/sirius/circuit');
     expect(post.headers['Content-Type'], startsWith('application/json'));
     expect(jsonDecode(post.body), isA<Map<String, Object?>>());
   });
@@ -230,5 +233,76 @@ void main() {
       ]),
       throwsA(isA<IqmException>()),
     );
+  });
+
+  test(
+    'star chips route each CZ through the resonator with MOVE gates',
+    () async {
+      final star = MockClient(
+        (r) async => http.Response(
+          jsonEncode({
+            'qubits': ['QB1', 'QB2', 'QB3'],
+            'computational_resonators': ['COMP_R'],
+            'gates': {
+              'cz': {
+                'implementations': {
+                  'tgss': {
+                    'loci': [
+                      ['QB1', 'COMP_R'],
+                      ['QB2', 'COMP_R'],
+                    ],
+                  },
+                },
+              },
+              'move': {
+                'implementations': {
+                  'tgss_crf': {
+                    'loci': [
+                      ['QB3', 'COMP_R'],
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          200,
+        ),
+      );
+      final c = IqmResonanceClient(const IqmConfig(token: 't'), client: star);
+      final route = await c.route();
+      expect(
+        [route.you, route.them, route.resonator],
+        ['QB1', 'QB3', 'COMP_R'],
+      );
+
+      final instr =
+          ((c.jobBody(ops, route)['circuits'] as List).single
+                  as Map)['instructions']
+              as List;
+      final names = [for (final i in instr) (i as Map)['name']];
+      expect(names.where((n) => n == 'cz').length, 4);
+      expect(names.where((n) => n == 'move').length, 8);
+      for (var i = 0; i < names.length; i++) {
+        if (names[i] == 'cz') {
+          expect([names[i - 1], names[i + 1]], ['move', 'move']);
+          expect((instr[i] as Map)['locus'], ['QB1', 'COMP_R']);
+          expect((instr[i - 1] as Map)['locus'], ['QB3', 'COMP_R']);
+        }
+      }
+      // Single-qubit gates and measurements stay on the two qubits.
+      final touched = {
+        for (final i in instr)
+          if ((i as Map)['name'] != 'cz' && i['name'] != 'move')
+            ...(i['locus'] as List),
+      };
+      expect(touched, {'QB1', 'QB3'});
+    },
+  );
+
+  test('crystal chips keep a direct CZ', () async {
+    final s = _FakeServer();
+    final route = await _client(s).route();
+    expect(route.resonator, isNull);
+    expect(route.czLocus, ['QB1', 'QB2']);
   });
 }

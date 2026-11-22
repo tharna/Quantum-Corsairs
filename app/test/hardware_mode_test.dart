@@ -117,7 +117,7 @@ void main() {
       final r = c.battle!.last!;
       expect(r.outcome, Outcome.youLance);
       expect(r.hardware!.jobId, 'j1');
-      expect(r.hardware!.device, 'garnet');
+      expect(r.hardware!.device, 'sirius');
       expect(r.hardware!.counts, [0, 1, 2, 1]);
       expect(r.fidelityPercent, b.pendingFidelity);
       expect(c.qpuNotice, isNull);

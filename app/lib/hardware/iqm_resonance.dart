@@ -26,11 +26,11 @@ class IqmConfig {
   });
 
   static const defaultServer = 'https://resonance.iqm.tech';
-  static const defaultComputer = 'garnet';
+  static const defaultComputer = 'sirius';
 
   final String serverUrl;
 
-  /// Quantum computer alias, such as "garnet".
+  /// Quantum computer alias, such as "sirius" or "garnet".
   final String computer;
   final String token;
   final int shots;
@@ -46,6 +46,27 @@ class IqmException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// Where a round runs on the chip. See [IqmResonanceClient.route].
+class IqmRoute {
+  const IqmRoute({
+    required this.you,
+    required this.them,
+    required this.czLocus,
+    this.resonator,
+    this.moveLocus,
+  });
+
+  final String you;
+  final String them;
+
+  /// The CZ locus exactly as the device lists it.
+  final List<String> czLocus;
+
+  /// Set on star chips: the computational resonator and the MOVE locus.
+  final String? resonator;
+  final List<String>? moveLocus;
 }
 
 /// Progress of a job, for the waiting screen.
@@ -115,7 +136,7 @@ class IqmResonanceClient {
 
   final IqmConfig config;
   final http.Client _http;
-  (String, String)? _pair;
+  IqmRoute? _route;
 
   static const _terminal = {'ready', 'failed', 'aborted'};
 
@@ -192,38 +213,81 @@ class IqmResonanceClient {
     return body.length > 200 ? '${body.substring(0, 200)}…' : body;
   }
 
-  /// Two qubits joined by a CZ gate in the current calibration.
-  Future<(String, String)> qubitPair() async {
-    if (_pair != null) return _pair!;
+  /// How the two emitters are placed on the chip.
+  ///
+  /// Works for both IQM layouts. On crystal chips (such as Garnet) two
+  /// qubits share a CZ gate directly. On star chips (such as Sirius) qubits
+  /// only couple through a computational resonator, so each CZ becomes
+  /// MOVE(them → resonator), CZ(you, resonator), MOVE(resonator → them),
+  /// the resolution IQM's own transpiler uses.
+  Future<IqmRoute> route() async {
+    if (_route != null) return _route!;
     final j = await _send(
       'GET',
       'calibration-sets/${config.computer}/default/dynamic-quantum-architecture',
     );
     if (j is! Map) throw const IqmException('Unexpected quantum architecture.');
     final qubits = {for (final q in (j['qubits'] as List? ?? const [])) '$q'};
-    final cz = (j['gates'] as Map?)?['cz'] as Map?;
-    final impls = (cz?['implementations'] as Map?) ?? const {};
-    final loci = <(String, String)>[];
-    for (final impl in impls.values) {
-      for (final locus in ((impl as Map)['loci'] as List? ?? const [])) {
-        final l = [for (final c in locus as List) '$c'];
-        if (l.length == 2 && qubits.contains(l[0]) && qubits.contains(l[1])) {
-          loci.add((l[0], l[1]));
+    final resonators = {
+      for (final r in (j['computational_resonators'] as List? ?? const []))
+        '$r',
+    };
+    List<List<String>> loci(String gate) {
+      final g = (j['gates'] as Map?)?[gate] as Map?;
+      final impls = (g?['implementations'] as Map?) ?? const {};
+      return [
+        for (final impl in impls.values)
+          for (final locus in ((impl as Map)['loci'] as List? ?? const []))
+            [for (final c in locus as List) '$c'],
+      ];
+    }
+
+    int byName(List<String> a, List<String> b) {
+      for (var i = 0; i < a.length && i < b.length; i++) {
+        final c = _natural(a[i], b[i]);
+        if (c != 0) return c;
+      }
+      return a.length - b.length;
+    }
+
+    final cz = loci('cz')..sort(byName);
+    // Crystal: a CZ directly between two qubits.
+    for (final l in cz) {
+      if (l.length == 2 && qubits.contains(l[0]) && qubits.contains(l[1])) {
+        return _route = IqmRoute(you: l[0], them: l[1], czLocus: l);
+      }
+    }
+    // Star: CZ(you, r) plus MOVE(them, r) on the same resonator r.
+    final moves = loci('move')..sort(byName);
+    for (final m in moves) {
+      if (m.length != 2) continue;
+      final r = m.firstWhere(resonators.contains, orElse: () => '');
+      final moved = m.firstWhere(qubits.contains, orElse: () => '');
+      if (r.isEmpty || moved.isEmpty) continue;
+      for (final l in cz) {
+        if (l.length != 2 || !l.contains(r)) continue;
+        final other = l.firstWhere((c) => c != r);
+        if (qubits.contains(other) && other != moved) {
+          return _route = IqmRoute(
+            you: other,
+            them: moved,
+            resonator: r,
+            czLocus: l,
+            moveLocus: m,
+          );
         }
       }
     }
-    if (loci.isEmpty) {
-      throw IqmException(
-        '${config.computer} has no CZ gate directly between two qubits, '
-        'so it cannot run this circuit.',
-      );
-    }
-    loci.sort(
-      (a, b) => _natural(a.$1, b.$1) != 0
-          ? _natural(a.$1, b.$1)
-          : _natural(a.$2, b.$2),
+    throw IqmException(
+      '${config.computer} offers no CZ between two qubits, directly or '
+      'through a resonator, so it cannot run this circuit.',
     );
-    return _pair = loci.first;
+  }
+
+  /// The two physical qubits used for your emitter and theirs.
+  Future<(String, String)> qubitPair() async {
+    final r = await route();
+    return (r.you, r.them);
   }
 
   static int _natural(String a, String b) {
@@ -236,31 +300,33 @@ class IqmResonanceClient {
     );
   }
 
-  /// The job request body for [ops] on physical [qubits].
-  Map<String, Object?> jobBody(List<NativeOp> ops, (String, String) qubits) {
-    String q(int i) => i == 0 ? qubits.$1 : qubits.$2;
+  /// The job request body for [ops] placed on the chip by [route].
+  Map<String, Object?> jobBody(List<NativeOp> ops, IqmRoute route) {
+    String q(int i) => i == 0 ? route.you : route.them;
+    Map<String, Object?> op(
+      String name,
+      List<String> locus, [
+      Map<String, Object?>? args,
+    ]) => {'name': name, 'locus': locus, 'args': args ?? <String, Object?>{}};
     return {
       'circuits': [
         {
           'name': 'quantum-corsairs-round',
           'instructions': [
             for (final o in ops)
-              switch (o.name) {
-                'prx' => {
-                  'name': 'prx',
-                  'locus': [q(o.qubit)],
-                  'args': {'angle': o.angle, 'phase': o.phase},
-                },
-                'cz' => {
-                  'name': 'cz',
-                  'locus': [q(o.qubit), q(o.other!)],
-                  'args': <String, Object?>{},
-                },
-                _ => {
-                  'name': 'measure',
-                  'locus': [q(o.qubit)],
-                  'args': {'key': o.key},
-                },
+              ...switch (o.name) {
+                'prx' => [
+                  op('prx', [q(o.qubit)], {'angle': o.angle, 'phase': o.phase}),
+                ],
+                'cz' when route.resonator == null => [op('cz', route.czLocus)],
+                'cz' => [
+                  op('move', route.moveLocus!),
+                  op('cz', route.czLocus),
+                  op('move', route.moveLocus!),
+                ],
+                _ => [
+                  op('measure', [q(o.qubit)], {'key': o.key}),
+                ],
               },
           ],
         },
@@ -278,11 +344,12 @@ class IqmResonanceClient {
   }) async {
     final deadline = DateTime.now().add(config.timeout);
     onProgress?.call(const IqmProgress('submitting'));
-    final pair = await qubitPair();
+    final placement = await route();
+    final pair = (placement.you, placement.them);
     final created = await _send(
       'POST',
       'jobs/${config.computer}/circuit',
-      body: jobBody(ops, pair),
+      body: jobBody(ops, placement),
     );
     final jobId = created is Map
         ? '${created['job_id'] ?? created['id'] ?? ''}'

@@ -437,8 +437,9 @@ class GameController extends ChangeNotifier {
     if (!hasIqmToken) throw const IqmException('Add an API token first.');
     final client = _iqmFactory(_iqmConfig());
     try {
-      final (a, b) = await client.qubitPair();
-      return 'Connected to ${_settings.iqmComputer}. Rounds will use qubits $a and $b.';
+      final r = await client.route();
+      final via = r.resonator == null ? '' : ', coupled through ${r.resonator}';
+      return 'Connected to ${_settings.iqmComputer}. Rounds will use qubits ${r.you} and ${r.them}$via.';
     } finally {
       client.close();
     }

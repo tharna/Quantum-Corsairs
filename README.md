@@ -41,13 +41,15 @@ This is the MVP scope from the design document:
 Rounds can be measured on a real superconducting quantum computer through [IQM Resonance](https://resonance.iqm.tech/), IQM's cloud service. Set it up under Settings › Quantum hardware:
 
 1. Paste the API token from your Resonance account. It is kept in the device's secure storage (Keychain on iOS, an encrypted store on Android, WebCrypto-encrypted storage on the web), never in the game save.
-2. Check the quantum computer name. The default is `garnet`; any device whose name appears in your Resonance account and that has CZ gates directly between qubits will work.
+2. Check the quantum computer name. The default is `sirius`. Any device in your Resonance account works, whatever its layout:
+   - **Crystal chips such as Garnet** couple qubits directly.
+   - **Star chips such as Sirius** couple them through a central resonator. There, each CZ runs as MOVE into the resonator, CZ, then MOVE back, the same way IQM's own transpiler handles it.
 3. Choose the shots per round, then tap **Save and test connection**. The test asks the device for its current calibration and reports the two coupled qubits it will use.
 4. Switch on **Measure on real hardware**.
 
 **How a round runs:**
 1. The game builds the round's circuit: the Bell-lock RYY(γ), both tunings, RYY(−γ) and a measurement. The Bell-lock fidelity γ is drawn from the forecast when the enemy commits, so the whole circuit is known before you fire.
-2. `packages/qc_core/lib/src/native.dart` compiles the circuit to IQM's native gates: 4 `cz` gates, single-qubit `prx` gates, and Z rotations tracked as virtual frame changes.
+2. `packages/qc_core/lib/src/native.dart` compiles the circuit to IQM's native gates: 4 `cz` gates, single-qubit `prx` gates, and Z rotations tracked as virtual frame changes. On a star chip, each `cz` is wrapped in `move` gates.
 3. The app submits it as a circuit job to the IQM Server REST API (`POST /api/v1/jobs/{computer}/circuit`), polls the job, and reads every shot.
 4. The **first shot** decides the round, so the collapse is a single real measurement. The report also shows all shots next to the ideal odds; the difference between them is the hardware's noise.
 
